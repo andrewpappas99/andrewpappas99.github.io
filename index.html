@@ -193,20 +193,16 @@ input,select,button{font-family:inherit}
           <div style="color:#55556a;font-size:11px;padding-top:16px;flex-shrink:0">Scoring weights<br/><span id="weights-total-badge" style="color:#c8a840"></span></div>
           <div style="flex:1;display:flex;gap:20px;flex-wrap:wrap;min-width:0">
             <div class="slider-group">
-              <div class="slider-label">Avg Rating <span id="lbl-avgRating" class="slider-val">45%</span></div>
-              <input type="range" min="0" max="100" value="45" id="sl-avgRating" class="wslider" oninput="onSlider('avgRating',this.value)"/>
+              <div class="slider-label">Volume &times; Quality <span id="lbl-ratingSum" class="slider-val">65%</span></div>
+              <input type="range" min="0" max="100" value="65" id="sl-ratingSum" class="wslider" oninput="onSlider('ratingSum',this.value)"/>
             </div>
             <div class="slider-group">
-              <div class="slider-label">Films Seen <span id="lbl-filmCount" class="slider-val">40%</span></div>
-              <input type="range" min="0" max="100" value="40" id="sl-filmCount" class="wslider" oninput="onSlider('filmCount',this.value)"/>
+              <div class="slider-label">Taste Affinity <span id="lbl-top3Score" class="slider-val">25%</span></div>
+              <input type="range" min="0" max="100" value="25" id="sl-top3Score" class="wslider" oninput="onSlider('top3Score',this.value)"/>
             </div>
             <div class="slider-group">
-              <div class="slider-label">Top 3 Avg <span id="lbl-top3Score" class="slider-val">7%</span></div>
-              <input type="range" min="0" max="100" value="7" id="sl-top3Score" class="wslider" oninput="onSlider('top3Score',this.value)"/>
-            </div>
-            <div class="slider-group">
-              <div class="slider-label">Rewatches <span id="lbl-rewatches" class="slider-val">8%</span></div>
-              <input type="range" min="0" max="100" value="8" id="sl-rewatches" class="wslider" oninput="onSlider('rewatches',this.value)"/>
+              <div class="slider-label">Rewatches <span id="lbl-rewatches" class="slider-val">10%</span></div>
+              <input type="range" min="0" max="100" value="10" id="sl-rewatches" class="wslider" oninput="onSlider('rewatches',this.value)"/>
             </div>
           </div>
           <button class="btn-ghost btn-sm" onclick="resetWeights()" style="margin-top:14px;flex-shrink:0">Reset</button>
@@ -248,7 +244,8 @@ input,select,button{font-family:inherit}
 <script src="film-db.js"></script>
 <script>
 // ─── Constants ────────────────────────────────────────────────────────────────
-let WEIGHTS = { avgRating:.45, filmCount:.40, top3Score:.07, rewatches:.08 };
+let WEIGHTS = { ratingSum:.65, rewatches:.10, top3Score:.25 };
+// ratingSum = log2(filmCount+1)*avgRating (volume×quality), top3Score = personal taste affinity
 let MIN_FILMS = 3, TOP_ACTORS = 5;
 const TMDB_CONCURRENCY = 4;
 const RANK_COLORS = ['#ffd700','#d4d4d4','#cd7f32','#9999bb'];
@@ -420,19 +417,28 @@ async function fetchCrewHybrid(films, apiKey, onProg, signal){
 }
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
-function computeScores(byPerson){
+function computeScores(byPerson, globalMean){
+  const gMean = globalMean ?? 3.5;
   const qualified=Object.entries(byPerson).filter(([,f])=>f.length>=MIN_FILMS);
   if(!qualified.length) return [];
-  const maxFilms=Math.max(...qualified.map(([,f])=>f.length));
   const maxRw=Math.max(...qualified.map(([,f])=>f.reduce((s,x)=>s+x.rewatchCount,0)),1);
+  // Pre-compute logVolQuality for each to find the max for normalization
+  const maxLogVQ=Math.max(...qualified.map(([,f])=>{
+    const r=f.filter(x=>x.rating>0);
+    const avg=r.length?r.reduce((s,x)=>s+x.rating,0)/r.length:0;
+    return Math.log2(f.length+1)*avg;
+  }),1);
   return qualified.map(([name,films])=>{
     const rated=films.filter(f=>f.rating>0);
-    const avgRating=rated.length?rated.reduce((s,f)=>s+f.rating,0)/rated.length:0;
     const filmCount=films.length, rewatchCount=films.reduce((s,f)=>s+f.rewatchCount,0);
-    const sorted=rated.map(f=>f.rating).sort((a,b)=>b-a);
-    const top3Avg=sorted.slice(0,3).reduce((a,b)=>a+b,0)/(Math.min(3,sorted.length)||1);
-    const score=WEIGHTS.avgRating*(avgRating/5)+WEIGHTS.filmCount*(filmCount/maxFilms)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*(top3Avg/5);
+    const avgRating=rated.length?rated.reduce((s,f)=>s+f.rating,0)/rated.length:0;
+    const logVolQuality=Math.log2(filmCount+1)*avgRating;
+    // Personal affinity: how far above the user's own mean this person's films were rated
+    const delta=avgRating-gMean;
+    const affinityScore=Math.max(0,Math.min(1,(delta+2.5)/5));
+    const score=WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore;
     const topFilms=[...rated].sort((a,b)=>b.rating-a.rating).slice(0,3);
+    const top3Avg=topFilms.slice(0,3).reduce((s,f)=>s+f.rating,0)/(Math.min(3,topFilms.length)||1);
     return{name,films,filmCount,rewatchCount,avgRating,top3Avg,score,topFilms};
   }).sort((a,b)=>b.score-a.score);
 }
@@ -448,9 +454,10 @@ function buildPersonMaps(films, filmData){
     (d.actors||[]).slice(0,TOP_ACTORS).forEach(a=>addTo(byActor,a));
     (d.genres||[]).forEach(g=>{ genreCount[g]=(genreCount[g]||0)+1; });
   }
-  // Sort genres by count
   const genres=Object.entries(genreCount).sort((a,b)=>b[1]-a[1]).map(([g,n])=>({genre:g,count:n}));
-  return{byDir,byWriter,byActor,genres};
+  const allRated=films.filter(f=>f.rating>0);
+  const globalMean=allRated.length?allRated.reduce((s,f)=>s+f.rating,0)/allRated.length:3.5;
+  return{byDir,byWriter,byActor,genres,globalMean};
 }
 
 // Rebuild raw person→films maps from scored arrays (fallback for v1/v2 cache files)
@@ -544,14 +551,15 @@ async function startAnalysis(){
 
     if(STATE.runId!==thisRunId) return;
     upd(90,'Calculating scores…');
-    const{byDir,byWriter,byActor,genres}=buildPersonMaps(films,filmData);
+    const{byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(films,filmData);
     STATE._totalFilms=films.length; STATE._matchedFilms=Object.keys(filmData).length;
     STATE._filmData=filmData; STATE._films=films;
     STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
+    STATE._globalMean=globalMean;
     STATE.genres=genres;
-    STATE.directors=computeScores(byDir);
-    STATE.writers=computeScores(byWriter);
-    STATE.actors=computeScores(byActor);
+    STATE.directors=computeScores(byDir,globalMean);
+    STATE.writers=computeScores(byWriter,globalMean);
+    STATE.actors=computeScores(byActor,globalMean);
 
     if(!STATE.directors.length&&!STATE.writers.length&&!STATE.actors.length)
       throw new Error(`Could not identify enough crew/cast data. Found ${Object.keys(byDir).length} directors, ${Object.keys(byWriter).length} writers, ${Object.keys(byActor).length} actors with ${MIN_FILMS}+ films.`);
@@ -801,18 +809,15 @@ function toggleWeights(){
 function onSlider(key, val){
   WEIGHTS[key]=parseInt(val)/100;
   document.getElementById('lbl-'+key).textContent=val+'%';
-  const total=Math.round((WEIGHTS.avgRating+WEIGHTS.filmCount+WEIGHTS.top3Score+WEIGHTS.rewatches)*100);
+  const total=Math.round((WEIGHTS.ratingSum+WEIGHTS.top3Score+WEIGHTS.rewatches)*100);
   const badge=document.getElementById('weights-total-badge');
   badge.textContent='Total: '+total+'%';
   badge.style.color=total===100?'#4a9a4a':'#c05050';
-  // Re-score and re-render if we have data
-  if(STATE.directors.length||STATE.writers.length||STATE.actors.length){
-    scheduleRender();
-  }
+  if(STATE.directors.length||STATE.writers.length||STATE.actors.length) scheduleRender();
 }
 
 function resetWeights(){
-  const defaults={avgRating:45,filmCount:40,top3Score:7,rewatches:8};
+  const defaults={ratingSum:65,rewatches:10,top3Score:25};
   for(const [k,v] of Object.entries(defaults)){
     WEIGHTS[k]=v/100;
     document.getElementById('sl-'+k).value=v;
@@ -829,14 +834,14 @@ function scheduleRender(){ clearTimeout(_renderTimer); _renderTimer=setTimeout(r
 // Re-run scoring (and optionally map-building) without re-fetching
 function reScoreAndRender(){
   if(!STATE._byDir) return;
-  // If we have raw filmData, re-run buildPersonMaps so TOP_ACTORS changes take effect
   if(STATE._filmData && STATE._films){
-    const{byDir,byWriter,byActor,genres}=buildPersonMaps(STATE._films,STATE._filmData);
-    STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor; STATE.genres=genres;
+    const{byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(STATE._films,STATE._filmData);
+    STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
+    STATE.genres=genres; STATE._globalMean=globalMean;
   }
-  STATE.directors=computeScores(STATE._byDir);
-  STATE.writers=computeScores(STATE._byWriter);
-  STATE.actors=computeScores(STATE._byActor);
+  STATE.directors=computeScores(STATE._byDir,STATE._globalMean);
+  STATE.writers=computeScores(STATE._byWriter,STATE._globalMean);
+  STATE.actors=computeScores(STATE._byActor,STATE._globalMean);
   renderResults();
 }
 
