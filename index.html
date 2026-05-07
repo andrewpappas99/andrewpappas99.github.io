@@ -628,7 +628,7 @@ function svgCards(top4,MTN_H,CARD_H){
     s+=`<text x="${cx0+cp}" y="${cy0+102}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">AVG RATING</text>`;
     for(let pi=0;pi<10;pi++)s+=`<rect x="${cx0+cp+pi*13}" y="${cy0+107}" width="10" height="3" rx="1.5" fill="${(pi/10)*5<cd.avgRating?cc:'#1e1e2e'}"/>`;
     s+=`<text x="${cx0+cp+135}" y="${cy0+111}" fill="#777" font-size="9" font-family="Georgia,serif">${cd.avgRating.toFixed(2)}</text>`;
-    s+=`<text x="${cx0+cp}" y="${cy0+128}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">TOP 3 AVG</text>`;
+    s+=`<text x="${cx0+cp}" y="${cy0+128}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">TOP FILMS</text>`;
     for(let ti=0;ti<10;ti++)s+=`<rect x="${cx0+cp+ti*13}" y="${cy0+133}" width="10" height="3" rx="1.5" fill="${(ti/10)*5<cd.top3Avg?cc:'#1e1e2e'}"/>`;
     s+=`<text x="${cx0+cp+135}" y="${cy0+137}" fill="#777" font-size="9" font-family="Georgia,serif">${cd.top3Avg.toFixed(2)}</text>`;
     s+=`<text x="${cx0+cp}" y="${cy0+156}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">BEST FILMS</text>`;
@@ -684,7 +684,6 @@ function personCardHTML(d,rank){
     </div>
     <div style="margin-bottom:12px">
       <div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
-      <div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin:8px 0 4px">Top 3 Avg</div>${pipsHTML(d.top3Avg,ac)}
     </div>
     ${d.topFilms.length?`<div><div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
   </div>`;
@@ -717,9 +716,8 @@ function renderCategoryPanel(cat){
     </div>
     <div id="svg-${cat}">${buildInlineSVG(top4,rushLabel)}</div>
     <div style="background:#0d0d1c;border:1px solid #1c1c2c;border-top:none;border-radius:0 0 12px 12px;padding:10px 20px;display:flex;gap:20px;flex-wrap:wrap;margin-bottom:22px">
-      <div style="font-size:11px"><span style="color:#77778a">Avg Rating</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.avgRating*100)}%</span></div>
-      <div style="font-size:11px"><span style="color:#77778a">Films Seen</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.filmCount*100)}%</span></div>
-      <div style="font-size:11px"><span style="color:#77778a">Top 3 Avg</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.top3Score*100)}%</span></div>
+      <div style="font-size:11px"><span style="color:#77778a">Volume × Quality</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.ratingSum*100)}%</span></div>
+      <div style="font-size:11px"><span style="color:#77778a">Taste Affinity</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.top3Score*100)}%</span></div>
       <div style="font-size:11px"><span style="color:#77778a">Rewatches</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.rewatches*100)}%</span></div>
       <div style="font-size:11px"><span style="color:#77778a">Min films</span><span style="color:#c8a84077;margin-left:5px">${MIN_FILMS}</span></div>
     </div>
@@ -867,7 +865,7 @@ function closeModal(){ document.getElementById('how-modal').classList.remove('op
 
 function updateModalText(){
   const fmt=v=>(v*100).toFixed(0)+'%';
-  ['avgRating','filmCount','top3Score','rewatches'].forEach(k=>{
+  ['ratingSum','top3Score','rewatches'].forEach(k=>{
     const el=document.getElementById('modal-w-'+k); if(el) el.textContent=fmt(WEIGHTS[k]);
   });
   const mf=document.getElementById('modal-min-films'); if(mf) mf.textContent=MIN_FILMS;
@@ -1002,27 +1000,23 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
     <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:18px">How It Works</h2>
 
     <div style="color:#88889a;font-size:13px;line-height:1.8;margin-bottom:20px">
-      Your Mount Rushmore is the four directors, writers, and actors who show up most meaningfully across your Letterboxd history — not just by volume, but by how much you love their work.
+      Your Mount Rushmore is the four directors, writers, and actors who define your personal taste — scored by how much you've watched them, how highly you rated their work, and how far above your own average they rank.
     </div>
 
     <div style="margin-bottom:18px">
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:10px">The Scoring Formula</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">⭐ Avg Rating</div><div style="color:#55556a;font-size:11px">Your mean star rating across all their films you've seen</div></div>
-          <div id="modal-w-avgRating" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">45%</div>
+          <div><div style="color:#e0d8c8;font-size:13px">📈 Volume × Quality</div><div style="color:#55556a;font-size:11px">Films seen × avg rating on a log scale — watching 10 films at 4★ beats 3 films at 5★, with diminishing returns on volume</div></div>
+          <div id="modal-w-ratingSum" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">65%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">🎬 Films Seen</div><div style="color:#55556a;font-size:11px">How many of their films are in your diary — normalized against the most-seen director</div></div>
-          <div id="modal-w-filmCount" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">40%</div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">🏆 Top 3 Avg</div><div style="color:#55556a;font-size:11px">Average of your three highest-rated films from them — rewards consistent excellence</div></div>
-          <div id="modal-w-top3Score" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">7%</div>
+          <div><div style="color:#e0d8c8;font-size:13px">✨ Taste Affinity</div><div style="color:#55556a;font-size:11px">How far above your personal rating average you score their films — makes your Rushmore uniquely yours</div></div>
+          <div id="modal-w-top3Score" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">25%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
           <div><div style="color:#e0d8c8;font-size:13px">🔁 Rewatches</div><div style="color:#55556a;font-size:11px">Films you've logged more than once — a strong signal of genuine love</div></div>
-          <div id="modal-w-rewatches" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">8%</div>
+          <div id="modal-w-rewatches" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">10%</div>
         </div>
       </div>
       <div style="color:#44445a;font-size:11px;margin-top:10px;line-height:1.6">Weights are normalized so the relative ratios always matter, even if they don't sum to 100%. Adjust them with the ⚖ Settings button. Minimum <span id="modal-min-films">3</span> films required to qualify.</div>
