@@ -437,7 +437,8 @@ function computeScores(byPerson, globalMean){
     // Personal affinity: how far above the user's own mean this person's films were rated
     const delta=avgRating-gMean;
     const affinityScore=Math.max(0,Math.min(1,(delta+2.5)/5));
-    const score=WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore;
+    const wSum=WEIGHTS.ratingSum+WEIGHTS.rewatches+WEIGHTS.top3Score||1;
+    const score=(WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore)/wSum;
     const topFilms=[...rated].sort((a,b)=>b.rating-a.rating).slice(0,3);
     const top3Avg=topFilms.slice(0,3).reduce((s,f)=>s+f.rating,0)/(Math.min(3,topFilms.length)||1);
     return{name,films,filmCount,rewatchCount,avgRating,top3Avg,score,topFilms};
@@ -491,13 +492,14 @@ function handleFileInput(files){
           if(!d.films.length||!Object.keys(d.filmData).length) throw new Error('Cache file has no film data.');
           STATE._filmData=d.filmData;
           STATE._films=d.films;
-          const{byDir,byWriter,byActor,genres}=buildPersonMaps(d.films,d.filmData);
+          const{byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(d.films,d.filmData);
           STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
+          STATE._globalMean=globalMean;
           if(genres.length) STATE.genres=genres;
           // Re-score with current weights/settings
-          STATE.directors=computeScores(byDir);
-          STATE.writers=computeScores(byWriter);
-          STATE.actors=computeScores(byActor);
+          STATE.directors=computeScores(byDir,globalMean);
+          STATE.writers=computeScores(byWriter,globalMean);
+          STATE.actors=computeScores(byActor,globalMean);
         } else {
           // Version 1/2: no raw data, rebuild maps from scored arrays only
           STATE.directors=d.directors||[];
@@ -781,7 +783,7 @@ function renderGenreStrip(){
   const ag=STATE._activeGenre;
   const chips=top.map(g=>{
     const active=ag===g.genre;
-    return `<button onclick="setGenreFilter(${JSON.stringify(g.genre)})" style="display:flex;align-items:center;gap:6px;background:${active?'#c8a840':'#111120'};border:1px solid ${active?'#c8a840':'#1e1e2e'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .15s">
+    return `<button onclick='setGenreFilter(${JSON.stringify(g.genre)})' style="display:flex;align-items:center;gap:6px;background:${active?'#c8a840':'#111120'};border:1px solid ${active?'#c8a840':'#1e1e2e'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .15s">
       <span style="color:${active?'#08080f':'#c8c0b0'};font-size:12px">${esc(String(g.genre))}</span>
       <span style="color:${active?'#08080f99':'#c8a84077'};font-size:10px">${esc(String(g.count))}</span>
       ${active?'<span style="color:#08080f;font-size:10px;margin-left:2px">×</span>':''}
@@ -914,7 +916,9 @@ function generateShareURL(){
   };
   const bytes=new TextEncoder().encode(JSON.stringify(payload));
   let bin=''; for(const b of bytes) bin+=String.fromCharCode(b);
-  return window.location.href.split('#')[0]+'#share='+btoa(bin);
+  // URL-safe base64: replace +→- /→_ and strip = padding so URLs survive sharing
+  const b64=btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  return window.location.href.split('#')[0]+'#share='+b64;
 }
 
 function shareResults(){
@@ -955,7 +959,11 @@ function loadShareFromHash(){
   if(!hash.startsWith('#share=')) return false;
   if(hash.length>8000){ showPage('page-upload'); setTimeout(()=>showToast('Share link is too long — it may be corrupted.'),300); return false; }
   try{
-    const bin=atob(hash.slice('#share='.length));
+    // Support both URL-safe base64 (new) and standard base64 (old links)
+    let b64=decodeURIComponent(hash.slice('#share='.length));
+    b64=b64.replace(/-/g,'+').replace(/_/g,'/');
+    while(b64.length%4) b64+='=';
+    const bin=atob(b64);
     const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));
     const shareState=validateShare(JSON.parse(new TextDecoder().decode(bytes)));
     renderShareView(shareState);
