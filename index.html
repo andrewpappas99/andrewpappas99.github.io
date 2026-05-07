@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://api.themoviedb.org https://image.tmdb.org https://api.allorigins.win https://corsproxy.io; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://api.themoviedb.org https://image.tmdb.org; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>Cinematic Mount Rushmore</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,400&display=swap" rel="stylesheet"/>
 <style>
@@ -81,46 +81,15 @@ input,select,button{font-family:inherit}
     </p>
   </div>
   <div style="max-width:660px;margin:0 auto;padding:32px 20px">
-    <!-- Input mode tabs -->
-    <div style="display:flex;gap:2px;background:#0a0a18;border:1px solid #1a1a2c;border-radius:10px;padding:4px;margin-bottom:24px">
-      <button id="tab-username" onclick="switchInputMode('username')" style="flex:1;background:#c8a840;color:#08080f;border:none;border-radius:7px;padding:10px;font-size:13px;font-weight:bold;cursor:pointer;transition:all .15s">Enter Username</button>
-      <button id="tab-csv" onclick="switchInputMode('csv')" style="flex:1;background:transparent;color:#66667a;border:none;border-radius:7px;padding:10px;font-size:13px;cursor:pointer;transition:all .15s">Upload CSV</button>
+    <div style="text-align:center;margin-bottom:28px">
+      <a href="https://letterboxd.com/settings/data/" target="_blank" class="btn-gold" style="display:inline-block;text-decoration:none;font-size:15px;padding:14px 28px">Export from Letterboxd →</a>
+      <p style="color:#44445a;font-size:12px;margin-top:10px">Settings → Import &amp; Export → Export Your Data · then unzip and upload below</p>
     </div>
-
-    <!-- Username panel -->
-    <div id="panel-username">
-      <div style="text-align:center;margin-bottom:28px">
-        <div style="font-size:36px;margin-bottom:14px">👤</div>
-        <p style="color:#77778a;font-size:13px;line-height:1.7;margin-bottom:18px">
-          Enter your Letterboxd username and we'll fetch your film diary directly.<br/>
-          <span style="color:#44445a">Your profile must be set to <b style="color:#66667a">public</b>.</span>
-        </p>
-        <div style="display:flex;gap:8px;max-width:360px;margin:0 auto">
-          <input id="username-input" class="input-field" placeholder="e.g. letterboxd username…" style="flex:1" onkeydown="if(event.key==='Enter')startUsernameAnalysis()"/>
-          <button class="btn-gold" onclick="startUsernameAnalysis()">Fetch →</button>
-        </div>
-        <p style="color:#33334a;font-size:11px;margin-top:12px">
-          <a href="https://letterboxd.com/settings/profile/" target="_blank" style="color:#44445a;text-decoration:none">How to make your profile public →</a>
-        </p>
-      </div>
-    </div>
-
-    <!-- CSV panel -->
-    <div id="panel-csv" style="display:none">
-      <div style="margin-bottom:24px">
-        <div class="eyebrow" style="margin-bottom:14px">How to get your data</div>
-        <div style="display:flex;flex-direction:column;gap:11px">
-          <div style="display:flex;gap:14px"><span style="color:#c8a84033;font-size:20px;font-weight:900;width:28px;flex-shrink:0;font-family:'Playfair Display',serif">01</span><div><b style="color:#e0d8c8;font-size:14px">letterboxd.com/settings</b><div style="color:#55556a;font-size:13px;margin-top:1px">Open account settings</div></div></div>
-          <div style="display:flex;gap:14px"><span style="color:#c8a84033;font-size:20px;font-weight:900;width:28px;flex-shrink:0;font-family:'Playfair Display',serif">02</span><div><b style="color:#e0d8c8;font-size:14px">Import &amp; Export → Export Your Data</b><div style="color:#55556a;font-size:13px;margin-top:1px">Downloads a .zip — extract it</div></div></div>
-          <div style="display:flex;gap:14px"><span style="color:#c8a84033;font-size:20px;font-weight:900;width:28px;flex-shrink:0;font-family:'Playfair Display',serif">03</span><div><b style="color:#e0d8c8;font-size:14px">Upload diary.csv and/or ratings.csv</b><div style="color:#55556a;font-size:13px;margin-top:1px">Both = best coverage. Or drop a saved .json to skip lookup.</div></div></div>
-        </div>
-      </div>
-      <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
-        <div style="font-size:26px;margin-bottom:10px">🎬</div>
-        <div id="drop-label" style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop files here or click to browse</div>
-        <div style="color:#44445a;font-size:12px">diary.csv · ratings.csv · or a previously saved .json data file</div>
-        <input id="file-input" type="file" accept=".csv,.json" multiple style="display:none" onchange="handleFileInput(this.files)"/>
-      </div>
+    <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div style="font-size:26px;margin-bottom:10px">🎬</div>
+      <div id="drop-label" style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop files here or click to browse</div>
+      <div style="color:#44445a;font-size:12px">diary.csv · ratings.csv · or a previously saved .json data file</div>
+      <input id="file-input" type="file" accept=".csv,.json" multiple style="display:none" onchange="handleFileInput(this.files)"/>
     </div>
     <!-- Config -->
     <div style="margin-top:18px;background:#0e0e1c;border:1px solid #1a1a2c;border-radius:12px;overflow:hidden">
@@ -189,9 +158,8 @@ input,select,button{font-family:inherit}
       <div style="font-size:36px;margin-bottom:20px">⚠️</div>
       <h3 style="font-family:'Playfair Display',Georgia,serif;color:#f0e8d8;margin:0 0 14px;font-size:22px">Something went wrong</h3>
       <p id="err-msg" style="color:#77778a;font-size:14px;line-height:1.75;margin-bottom:30px"></p>
-      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;justify-content:center">
         <button class="btn-gold" onclick="showPage('page-upload')">Try Again</button>
-        <button class="btn-ghost" onclick="showPage('page-upload');switchInputMode('csv')">Upload CSV Instead</button>
         <button class="btn-ghost" onclick="showPage('page-upload');toggleConfig(true)">Check API Keys</button>
       </div>
     </div>
@@ -307,95 +275,7 @@ function lookupFromDB(film){
 // ─── State ────────────────────────────────────────────────────────────────────
 const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
-  runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0,
-  inputMode:'username' };
-
-// ─── Input Mode Tabs ──────────────────────────────────────────────────────────
-function switchInputMode(mode){
-  STATE.inputMode=mode;
-  document.getElementById('panel-username').style.display=mode==='username'?'block':'none';
-  document.getElementById('panel-csv').style.display=mode==='csv'?'block':'none';
-  document.getElementById('tab-username').style.background=mode==='username'?'#c8a840':'transparent';
-  document.getElementById('tab-username').style.color=mode==='username'?'#08080f':'#66667a';
-  document.getElementById('tab-username').style.fontWeight=mode==='username'?'bold':'normal';
-  document.getElementById('tab-csv').style.background=mode==='csv'?'#c8a840':'transparent';
-  document.getElementById('tab-csv').style.color=mode==='csv'?'#08080f':'#66667a';
-  document.getElementById('tab-csv').style.fontWeight=mode==='csv'?'bold':'normal';
-}
-
-// ─── Letterboxd Scraping ─────────────────────────────────────────────────────
-async function fetchLetterboxdPage(username, page, signal){
-  const target=`https://letterboxd.com/${encodeURIComponent(username)}/films/page/${page}/`;
-  const proxies=[
-    `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`,
-    `https://corsproxy.io/?${encodeURIComponent(target)}`
-  ];
-  for(const proxy of proxies){
-    try{
-      const res=await fetch(proxy,{signal});
-      if(!res.ok) continue;
-      const json=await res.json();
-      const html=json.contents||json;
-      if(typeof html!=='string'||html.length<200) continue;
-      return parseLetterboxdPage(html);
-    }catch(e){ if(e.name==='AbortError') throw e; }
-  }
-  throw new Error('Could not reach Letterboxd. Your profile may be private, or try uploading a CSV instead.');
-}
-
-function parseLetterboxdPage(html){
-  const doc=new DOMParser().parseFromString(html,'text/html');
-  const films=[];
-  doc.querySelectorAll('li.poster-container').forEach(li=>{
-    const div=li.querySelector('[data-film-name]');
-    if(!div) return;
-    const name=div.getAttribute('data-film-name')||'';
-    const year=parseInt(div.getAttribute('data-film-release-year'))||0;
-    const ratingEl=li.querySelector('.rating');
-    const ratingClass=ratingEl?[...ratingEl.classList].find(c=>c.startsWith('rated-')):null;
-    // Letterboxd stores rating as 1-10 half-stars; divide by 2 for 0-5 scale
-    const rating=ratingClass?parseInt(ratingClass.replace('rated-',''))/2:0;
-    if(name&&year) films.push({name,year,rating,rewatch:false});
-  });
-  const hasNext=!!doc.querySelector('a.next');
-  return{films,hasNext};
-}
-
-async function fetchAllLetterboxdFilms(username,onProg,signal){
-  const all=[];
-  let page=1;
-  while(true){
-    onProg(null,`Fetching page ${page}… (${all.length} films so far)`);
-    const{films,hasNext}=await fetchLetterboxdPage(username,page,signal);
-    all.push(...films);
-    if(!hasNext) break;
-    page++;
-  }
-  if(!all.length) throw new Error(`No films found for "${username}". Check the username and make sure your profile is public.`);
-  return all;
-}
-
-async function startUsernameAnalysis(){
-  const username=document.getElementById('username-input').value.trim();
-  if(!username){ document.getElementById('username-input').focus(); return; }
-  STATE.userName='';
-  showPage('page-processing');
-  STATE.runId++;
-  const thisRunId=STATE.runId;
-  STATE.abortController=new AbortController();
-  const signal=STATE.abortController.signal;
-  document.getElementById('proc-title').textContent=`Fetching ${username}'s diary…`;
-  try{
-    const allRaw=await fetchAllLetterboxdFilms(username,upd,signal);
-    if(STATE.runId!==thisRunId) return;
-    STATE.userName=username;
-    document.getElementById('proc-title').textContent=`Sculpting ${username}'s mountain…`;
-    await runAnalysisPipeline(allRaw,thisRunId,signal);
-  }catch(e){
-    if(STATE.runId!==thisRunId) return;
-    showError(e.message||'An unexpected error occurred.');
-  }
-}
+  runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0 };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -637,36 +517,6 @@ dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
 dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag'); const files=Array.from(e.dataTransfer.files).filter(f=>f.name.endsWith('.csv')||f.name.endsWith('.json')); if(files.length)handleFileInput(files);});
 
 // ─── Analysis ─────────────────────────────────────────────────────────────────
-async function runAnalysisPipeline(allRaw, thisRunId, signal){
-  if(!allRaw.length) throw new Error('No films found.');
-  const films=consolidateFilms(allRaw);
-  upd(8,`Found ${films.length} unique films. Looking up directors, writers, and actors…`);
-
-  const tmdbKey=getKey('tmdb');
-  upd(10,`Checking built-in database for ${films.length} films…`);
-  const filmData=await fetchCrewHybrid(films,tmdbKey,upd,signal);
-  if(STATE.runId!==thisRunId) return;
-  if(!filmData) throw new Error(Object.keys(FILM_DB).length>0
-    ?'No films matched — try adding a free TMDB API key in ⚙ for better coverage.'
-    :'No built-in database found and no TMDB API key set. Run build-db.js or add a TMDB key in ⚙.');
-
-  if(STATE.runId!==thisRunId) return;
-  upd(90,'Calculating scores…');
-  const{byDir,byWriter,byActor,genres}=buildPersonMaps(films,filmData);
-  STATE._totalFilms=films.length; STATE._matchedFilms=Object.keys(filmData).length;
-  STATE._filmData=filmData; STATE._films=films;
-  STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
-  STATE.genres=genres;
-  STATE.directors=computeScores(byDir);
-  STATE.writers=computeScores(byWriter);
-  STATE.actors=computeScores(byActor);
-
-  if(!STATE.directors.length&&!STATE.writers.length&&!STATE.actors.length)
-    throw new Error(`Could not identify enough crew/cast data. Found ${Object.keys(byDir).length} directors, ${Object.keys(byWriter).length} writers, ${Object.keys(byActor).length} actors with ${MIN_FILMS}+ films.`);
-
-  upd(100,''); renderResults(); showPage('page-results');
-}
-
 async function startAnalysis(){
   STATE.runId++;
   const thisRunId=STATE.runId;
@@ -680,7 +530,33 @@ async function startAnalysis(){
     let allRaw=[];
     for(const file of STATE.selectedFiles){ const text=await file.text(); allRaw=allRaw.concat(parseLetterboxdCSV(text)); }
     if(STATE.runId!==thisRunId) return;
-    await runAnalysisPipeline(allRaw,thisRunId,signal);
+    if(!allRaw.length) throw new Error('No films found.');
+    const films=consolidateFilms(allRaw);
+    upd(8,`Found ${films.length} unique films. Looking up directors, writers, and actors…`);
+
+    const tmdbKey=getKey('tmdb');
+    upd(10,`Checking built-in database for ${films.length} films…`);
+    const filmData=await fetchCrewHybrid(films,tmdbKey,upd,signal);
+    if(STATE.runId!==thisRunId) return;
+    if(!filmData) throw new Error(Object.keys(FILM_DB).length>0
+      ?'No films matched — try adding a free TMDB API key in ⚙ for better coverage.'
+      :'No built-in database found and no TMDB API key set. Run build-db.js or add a TMDB key in ⚙.');
+
+    if(STATE.runId!==thisRunId) return;
+    upd(90,'Calculating scores…');
+    const{byDir,byWriter,byActor,genres}=buildPersonMaps(films,filmData);
+    STATE._totalFilms=films.length; STATE._matchedFilms=Object.keys(filmData).length;
+    STATE._filmData=filmData; STATE._films=films;
+    STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
+    STATE.genres=genres;
+    STATE.directors=computeScores(byDir);
+    STATE.writers=computeScores(byWriter);
+    STATE.actors=computeScores(byActor);
+
+    if(!STATE.directors.length&&!STATE.writers.length&&!STATE.actors.length)
+      throw new Error(`Could not identify enough crew/cast data. Found ${Object.keys(byDir).length} directors, ${Object.keys(byWriter).length} writers, ${Object.keys(byActor).length} actors with ${MIN_FILMS}+ films.`);
+
+    upd(100,''); renderResults(); showPage('page-results');
   }catch(e){
     if(STATE.runId!==thisRunId) return;
     showError(e.message||'An unexpected error occurred.');
@@ -690,7 +566,7 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0; document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; document.getElementById('username-input').value=''; switchInputMode('username'); switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0; document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
