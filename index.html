@@ -272,7 +272,8 @@ function lookupFromDB(film){
 // ─── State ────────────────────────────────────────────────────────────────────
 const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
-  runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0 };
+  runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0,
+  _activeGenre:null };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -574,7 +575,7 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0; document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null; document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
@@ -763,6 +764,7 @@ function renderResults(){
   const anyRated=films.some(f=>f.rating>0);
   const anyRewatch=films.some(f=>f.rewatchCount>0);
   const banners=[];
+  if(STATE._activeGenre) banners.push(`Filtered to <b>${esc(STATE._activeGenre)}</b> films only — click the genre chip above to clear.`);
   if(films.length&&!anyRated) banners.push('No star ratings detected — scores are based on view count only. Upload <b>ratings.csv</b> alongside your diary for full scoring.');
   if(films.length&&!anyRewatch) banners.push('No diary rewatch data detected — the rewatch weight has no effect. Upload <b>diary.csv</b> for rewatch scoring.');
   if(STATE._totalFilms>0) banners.push(STATE._matchedFilms+' / '+STATE._totalFilms+' films matched'+(STATE._dbMisses>0&&!getKey('tmdb')?' — '+STATE._dbMisses+' not found in the built-in database. Add a free <b>TMDB API key</b> in ⚙ to look them up live.':'.'));
@@ -775,12 +777,24 @@ function renderGenreStrip(){
   const strip=document.getElementById('genre-strip');
   if(!genres.length){strip.style.display='none';return;}
   strip.style.display='';
-  const top=genres.slice(0,8);
-  document.getElementById('genre-chips').innerHTML=top.map(g=>`
-    <div style="display:flex;align-items:center;gap:6px;background:#111120;border:1px solid #1e1e2e;border-radius:20px;padding:4px 12px">
-      <span style="color:#c8c0b0;font-size:12px">${esc(String(g.genre))}</span>
-      <span style="color:#c8a84077;font-size:10px">${esc(String(g.count))}</span>
-    </div>`).join('');
+  const top=genres.slice(0,12);
+  const ag=STATE._activeGenre;
+  const chips=top.map(g=>{
+    const active=ag===g.genre;
+    return `<button onclick="setGenreFilter(${JSON.stringify(g.genre)})" style="display:flex;align-items:center;gap:6px;background:${active?'#c8a840':'#111120'};border:1px solid ${active?'#c8a840':'#1e1e2e'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .15s">
+      <span style="color:${active?'#08080f':'#c8c0b0'};font-size:12px">${esc(String(g.genre))}</span>
+      <span style="color:${active?'#08080f99':'#c8a84077'};font-size:10px">${esc(String(g.count))}</span>
+      ${active?'<span style="color:#08080f;font-size:10px;margin-left:2px">×</span>':''}
+    </button>`;
+  }).join('');
+  const allChip=ag?`<button onclick="setGenreFilter(null)" style="display:flex;align-items:center;gap:4px;background:transparent;border:1px solid #2a2a3a;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;color:#55556a;font-size:12px;transition:all .15s">All genres</button>`:'';
+  document.getElementById('genre-chips').innerHTML=allChip+chips;
+}
+
+function setGenreFilter(genre){
+  STATE._activeGenre=(genre===STATE._activeGenre)?null:genre;
+  renderGenreStrip();
+  reScoreAndRender();
 }
 
 function switchCat(cat){
@@ -833,9 +847,13 @@ function scheduleRender(){ clearTimeout(_renderTimer); _renderTimer=setTimeout(r
 function reScoreAndRender(){
   if(!STATE._byDir) return;
   if(STATE._filmData && STATE._films){
-    const{byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(STATE._films,STATE._filmData);
-    STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
-    STATE.genres=genres; STATE._globalMean=globalMean;
+    const films=STATE._activeGenre
+      ? STATE._films.filter(f=>{ const d=STATE._filmData[f.name+'||'+f.year]; return d&&(d.genres||[]).includes(STATE._activeGenre); })
+      : STATE._films;
+    const maps=buildPersonMaps(films,STATE._filmData);
+    STATE._byDir=maps.byDir; STATE._byWriter=maps.byWriter; STATE._byActor=maps.byActor;
+    // Only update full genre list and global mean when not filtering
+    if(!STATE._activeGenre){ STATE.genres=maps.genres; STATE._globalMean=maps.globalMean; }
   }
   STATE.directors=computeScores(STATE._byDir,STATE._globalMean);
   STATE.writers=computeScores(STATE._byWriter,STATE._globalMean);
@@ -910,18 +928,19 @@ function shareResults(){
 
 function validateShare(p){
   if(!p||typeof p!=='object') throw new Error('bad payload');
+  const safeNum=(v,min,max)=>{ const n=Number(v); return (Number.isFinite(n)?Math.min(max,Math.max(min,n)):0); };
   const cp=d=>({
-    name:String(d?.n??d?.name??''),
-    filmCount:Number(d?.fc??d?.filmCount)||0,
-    avgRating:Number(d?.ar??d?.avgRating)||0,
+    name:String(d?.n??d?.name??'').slice(0,120),
+    filmCount:safeNum(d?.fc??d?.filmCount,0,100000),
+    avgRating:safeNum(d?.ar??d?.avgRating,0,5),
     topFilms:Array.isArray(d?.tf??d?.topFilms)
       ?(d.tf||d.topFilms).slice(0,3).map(f=>({
-        name:String(f?.n??f?.name??''),
-        year:Number(f?.y??f?.year)||0,
-        rating:Number(f?.r??f?.rating)||0
+        name:String(f?.n??f?.name??'').slice(0,120),
+        year:safeNum(f?.y??f?.year,1850,2100),
+        rating:safeNum(f?.r??f?.rating,0,5)
       })):[]
   });
-  const cg=g=>({genre:String(g?.g??g?.genre??''),count:Number(g?.c??g?.count)||0});
+  const cg=g=>({genre:String(g?.g??g?.genre??'').slice(0,40),count:safeNum(g?.c??g?.count,0,100000)});
   return{
     userName:String(p.un||'').slice(0,60),
     directors:Array.isArray(p.d)?p.d.slice(0,4).map(cp):[],
@@ -934,6 +953,7 @@ function validateShare(p){
 function loadShareFromHash(){
   const hash=window.location.hash;
   if(!hash.startsWith('#share=')) return false;
+  if(hash.length>8000){ showPage('page-upload'); setTimeout(()=>showToast('Share link is too long — it may be corrupted.'),300); return false; }
   try{
     const bin=atob(hash.slice('#share='.length));
     const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));
