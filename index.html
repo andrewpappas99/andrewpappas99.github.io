@@ -265,7 +265,8 @@ function lookupFromDB(film){
     director:parts[0]||null,
     writers:parts[1]?parts[1].split(','):[],
     actors:parts[2]?parts[2].split(','):[],
-    genres:parts[3]?parts[3].split(','):[]
+    genres:parts[3]?parts[3].split(','):[],
+    voteAvg:parts[4]?parseFloat(parts[4]):null
   };
 }
 
@@ -357,7 +358,8 @@ async function lookupOneTMDB(film, apiKey, signal){
   const writers=[...new Set(crew.filter(c=>WRITING_JOBS.includes(c.job)).map(c=>c.name))].slice(0,3);
   const actors=cast.slice(0,10).map(c=>c.name); // store top 10, slice at scoring time per TOP_ACTORS setting
   const genres=(movie.genre_ids||[]).map(id=>TMDB_GENRES[id]).filter(Boolean);
-  return {director,writers,actors,genres};
+  const voteAvg=movie.vote_average?movie.vote_average/2:null; // TMDB 0-10 → 0-5 scale
+  return {director,writers,actors,genres,voteAvg};
 }
 
 async function fetchCrewTMDB(films, apiKey, onProg, signal){
@@ -434,8 +436,11 @@ function computeScores(byPerson, globalMean){
     const filmCount=films.length, rewatchCount=films.reduce((s,f)=>s+f.rewatchCount,0);
     const avgRating=rated.length?rated.reduce((s,f)=>s+f.rating,0)/rated.length:0;
     const logVolQuality=Math.log2(filmCount+1)*avgRating;
-    // Personal affinity: how far above the user's own mean this person's films were rated
-    const delta=avgRating-gMean;
+    // Taste affinity: how far above community ratings you score this person's films
+    const withCommunity=rated.filter(f=>f.voteAvg!=null&&f.voteAvg>0);
+    const delta=withCommunity.length>=2
+      ? withCommunity.reduce((s,f)=>s+(f.rating-f.voteAvg),0)/withCommunity.length
+      : avgRating-gMean; // fallback if no community data
     const affinityScore=Math.max(0,Math.min(1,(delta+2.5)/5));
     const wSum=WEIGHTS.ratingSum+WEIGHTS.rewatches+WEIGHTS.top3Score||1;
     const score=(WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore)/wSum;
@@ -450,6 +455,7 @@ function buildPersonMaps(films, filmData){
   for(const f of films){
     const d=filmData[f.name+'||'+f.year];
     if(!d) continue;
+    if(d.voteAvg!=null) f.voteAvg=d.voteAvg;
     const addTo=(map,person)=>{ if(!map[person])map[person]=[]; map[person].push(f); };
     if(d.director) addTo(byDir,d.director);
     (d.writers||[]).forEach(w=>addTo(byWriter,w));
@@ -1028,7 +1034,7 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
     <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:18px">How It Works</h2>
 
     <div style="color:#88889a;font-size:13px;line-height:1.8;margin-bottom:20px">
-      Your Mount Rushmore is the four directors, writers, and actors who define your personal taste — scored by how much you've watched them, how highly you rated their work, and how far above your own average they rank.
+      Your Mount Rushmore is the four directors, writers, and actors who define your personal taste — scored by how much you've watched them, how highly you rated their work, and how far above the community average you rate them.
     </div>
 
     <div style="margin-bottom:18px">
@@ -1039,7 +1045,7 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
           <div id="modal-w-ratingSum" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">65%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">✨ Taste Affinity</div><div style="color:#55556a;font-size:11px">How far above your personal rating average you score their films — makes your Rushmore uniquely yours</div></div>
+          <div><div style="color:#e0d8c8;font-size:13px">✨ Taste Affinity</div><div style="color:#55556a;font-size:11px">How far above the community average you rate their films — highlights your personal favorites over crowd pleasers</div></div>
           <div id="modal-w-top3Score" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">25%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
