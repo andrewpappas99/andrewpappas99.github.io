@@ -446,7 +446,9 @@ function computeScores(byPerson, globalMean){
     const score=(WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore)/wSum;
     const topFilms=[...rated].sort((a,b)=>b.rating-a.rating).slice(0,3);
     const top3Avg=topFilms.slice(0,3).reduce((s,f)=>s+f.rating,0)/(Math.min(3,topFilms.length)||1);
-    return{name,films,filmCount,rewatchCount,avgRating,top3Avg,score,topFilms};
+    const hasCommunity=withCommunity.length>=2;
+    return{name,films,filmCount,rewatchCount,avgRating,top3Avg,score,topFilms,
+      logVQNorm:logVolQuality/maxLogVQ,affinityScore,affinityDelta:delta,hasCommunity};
   }).sort((a,b)=>b.score-a.score);
 }
 
@@ -691,8 +693,28 @@ function personCardHTML(d,rank){
         <div style="color:#66667a;font-size:11px;margin-top:2px">${d.filmCount} film${d.filmCount!==1?'s':''}${d.rewatchCount>0?' · '+d.rewatchCount+' rewatch'+(d.rewatchCount!==1?'es':''):''}</div></div>
       <div style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0">${(d.score*100).toFixed(1)}</div>
     </div>
-    <div style="margin-bottom:12px">
-      <div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
+    <div style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px">
+      <div>
+        <div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
+          <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Volume × Quality</span>
+          <span style="color:#66667a;font-size:9px">${d.filmCount} film${d.filmCount!==1?'s':''} · ★${d.avgRating.toFixed(2)}</span>
+        </div>
+        <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:${Math.round((d.logVQNorm||0)*100)}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px"></div>
+        </div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
+          <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Taste Affinity</span>
+          <span style="color:#66667a;font-size:9px">${d.affinityDelta>=0?'+':''}${d.affinityDelta.toFixed(2)}★ ${d.hasCommunity?'vs audience':'vs your avg'}</span>
+        </div>
+        <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:${Math.round((d.affinityScore||0)*100)}%;background:linear-gradient(90deg,#c8a84088,#c8a840);border-radius:2px"></div>
+        </div>
+      </div>
     </div>
     ${d.topFilms.length?`<div><div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
   </div>`;
