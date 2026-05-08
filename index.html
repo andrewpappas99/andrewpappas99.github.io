@@ -425,7 +425,7 @@ async function fetchCrewHybrid(films, apiKey, onProg, signal){
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 function computeScores(byPerson, globalMean){
   const gMean = globalMean ?? 3.5;
-  const qualified=Object.entries(byPerson).filter(([,f])=>f.length>=MIN_FILMS);
+  const qualified=Object.entries(byPerson).filter(([,f])=>f.filter(x=>x.rating>0).length>=MIN_FILMS);
   if(!qualified.length) return [];
   const maxRw=Math.max(...qualified.map(([,f])=>f.reduce((s,x)=>s+x.rewatchCount,0)),1);
   // Pre-compute logVolQuality for each to find the max for normalization
@@ -449,8 +449,9 @@ function computeScores(byPerson, globalMean){
     const score=(WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore)/wSum;
     const topFilms=[...rated].sort((a,b)=>b.rating-a.rating).slice(0,3);
     const top3Avg=topFilms.slice(0,3).reduce((s,f)=>s+f.rating,0)/(Math.min(3,topFilms.length)||1);
+    const ratedCount=rated.length;
     const hasCommunity=withCommunity.length>=2;
-    return{name,films,filmCount,rewatchCount,avgRating,top3Avg,score,topFilms,
+    return{name,films,filmCount,ratedCount,rewatchCount,avgRating,top3Avg,score,topFilms,
       logVQNorm:logVolQuality/maxLogVQ,affinityScore,affinityDelta:delta,hasCommunity};
   }).sort((a,b)=>b.score-a.score);
 }
@@ -686,14 +687,19 @@ function pipsHTML(val,col){let h='<div style="display:flex;gap:2px;align-items:c
 function personCardHTML(d,rank){
   const ac=rank<=4?RANK_COLORS[rank-1]:'#557799';
   const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
+  const watchedUnrated=d.films.filter(f=>f.rating===0);
+  const displayFilms=[...d.topFilms,...watchedUnrated].slice(0,3);
   let topFilms='';
-  for(const f of d.topFilms)topFilms+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><span style="color:#c8c0ae;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(f.name)}</span><span style="color:${ac};font-size:10px;margin-left:8px;flex-shrink:0">${stars(f.rating)}</span></div>`;
+  for(const f of displayFilms){
+    const label=f.rating>0?`<span style="color:${ac};font-size:10px;margin-left:8px;flex-shrink:0">${stars(f.rating)}</span>`:`<span style="color:#33334a;font-size:10px;margin-left:8px;flex-shrink:0">watched</span>`;
+    topFilms+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><span style="color:#c8c0ae;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(f.name)}</span>${label}</div>`;
+  }
   return `<div class="card" style="border:1px solid ${ac}28">
     <div style="position:absolute;top:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,${ac}aa,transparent)"></div>
     <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px">
       <div style="width:34px;height:34px;border-radius:8px;background:${ac}18;border:1px solid ${ac}44;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:${ac};font-size:13px;font-weight:bold">${rank}</div>
       <div style="min-width:0;flex:1"><div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(d.name)}</div>
-        <div style="color:#66667a;font-size:11px;margin-top:2px">${d.filmCount} film${d.filmCount!==1?'s':''}${d.rewatchCount>0?' · '+d.rewatchCount+' rewatch'+(d.rewatchCount!==1?'es':''):''}</div></div>
+        <div style="color:#66667a;font-size:11px;margin-top:2px">${d.ratedCount} rated${d.filmCount>d.ratedCount?' · '+(d.filmCount-d.ratedCount)+' watched':''}${d.rewatchCount>0?' · '+d.rewatchCount+' rewatch'+(d.rewatchCount!==1?'es':''):''}</div></div>
       <div style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0">${(d.score*100).toFixed(1)}</div>
     </div>
     <div style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px">
@@ -703,7 +709,7 @@ function personCardHTML(d,rank){
       <div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
           <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Volume × Quality</span>
-          <span style="color:#66667a;font-size:9px">${d.filmCount} film${d.filmCount!==1?'s':''} · ★${d.avgRating.toFixed(2)}</span>
+          <span style="color:#66667a;font-size:9px">${d.ratedCount} rated · ★${d.avgRating.toFixed(2)}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
           <div style="height:100%;width:${Math.round((d.logVQNorm||0)*100)}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px"></div>
@@ -763,7 +769,7 @@ function renderCategoryPanel(cat){
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <input id="${searchId}" class="input-field" style="flex:1;min-width:180px" placeholder="Search ${catLabel.toLowerCase()}…" oninput="filterCat('${cat}')"/>
         <select id="${sortId}" class="input-field" style="width:auto;cursor:pointer;background:#0e0e1c;border-color:#252535;color:#88889a" onchange="filterCat('${cat}')">
-          <option value="score">Sort: Score</option><option value="logvq">Sort: Vol × Quality</option><option value="affinity">Sort: Taste Affinity</option><option value="films">Sort: Films Seen</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option><option value="name">Sort: Name A–Z</option>
+          <option value="score">Sort: Score</option><option value="logvq">Sort: Vol × Quality</option><option value="affinity">Sort: Taste Affinity</option><option value="rated">Sort: Films Rated</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option><option value="name">Sort: Name A–Z</option>
         </select>
       </div>
     </div>
@@ -777,7 +783,7 @@ function filterCat(cat){
   const sort=(document.getElementById(`sort-${cat}`).value)||'score';
   const rankMap={}; STATE[cat].forEach((d,i)=>rankMap[d.name]=i+1);
   let data=[...STATE[cat]].filter(d=>!search||d.name.toLowerCase().includes(search));
-  data.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='films'?b.filmCount-a.filmCount:sort==='rating'?b.avgRating-a.avgRating:sort==='rewatches'?b.rewatchCount-a.rewatchCount:sort==='logvq'?b.logVQNorm-a.logVQNorm:sort==='affinity'?b.affinityScore-a.affinityScore:b.score-a.score);
+  data.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='rated'?b.ratedCount-a.ratedCount:sort==='rating'?b.avgRating-a.avgRating:sort==='rewatches'?b.rewatchCount-a.rewatchCount:sort==='logvq'?b.logVQNorm-a.logVQNorm:sort==='affinity'?b.affinityScore-a.affinityScore:b.score-a.score);
   const grid=document.getElementById(`grid-${cat}`), empty=document.getElementById(`empty-${cat}`);
   if(!data.length){grid.innerHTML='';empty.style.display='block';}
   else{empty.style.display='none';grid.innerHTML=data.map(d=>personCardHTML(d,rankMap[d.name])).join('');}
