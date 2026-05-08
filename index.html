@@ -233,6 +233,9 @@ input,select,button{font-family:inherit}
     </div>
   </div>
 
+  <!-- Conformity strip -->
+  <div id="conformity-strip" style="display:none"></div>
+
   <!-- Data quality banners -->
   <div id="data-quality-banner"></div>
 
@@ -798,6 +801,7 @@ function renderResults(){
     if(STATE[cat].length) filterCat(cat);
   });
   renderGenreStrip();
+  renderConformityStrip();
   // Data quality banners
   const films=STATE._films||[];
   const anyRated=films.some(f=>f.rating>0);
@@ -828,6 +832,29 @@ function renderGenreStrip(){
   }).join('');
   const allChip=ag?`<button onclick="setGenreFilter(null)" style="display:flex;align-items:center;gap:4px;background:transparent;border:1px solid #2a2a3a;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;color:#55556a;font-size:12px;transition:all .15s">All genres</button>`:'';
   document.getElementById('genre-chips').innerHTML=allChip+chips;
+}
+
+function renderConformityStrip(){
+  const el=document.getElementById('conformity-strip');
+  const c=STATE._conformity;
+  if(!c){el.style.display='none';return;}
+  const barColor=c.score>=70?'#4a9a6a':c.score>=50?'#c8a840':'#c85040';
+  el.style.display='';
+  el.innerHTML=`<div style="background:#08080f;border-bottom:1px solid #111120;padding:12px 0">
+    <div class="wrap">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <span style="color:#44445a;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Conformity</span>
+        <div style="flex:1;min-width:120px;max-width:260px">
+          <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${c.score}%;background:linear-gradient(90deg,${barColor}88,${barColor});border-radius:2px;transition:width .4s ease"></div>
+          </div>
+        </div>
+        <span style="color:${barColor};font-size:13px;font-weight:bold;flex-shrink:0">${c.score}%</span>
+        <span style="color:#55556a;font-size:12px;flex-shrink:0">${c.label}</span>
+        <span style="color:#2a2a3a;font-size:11px;flex-shrink:0">based on ${c.filmCount} films vs. community</span>
+      </div>
+    </div>
+  </div>`;
 }
 
 function setGenreFilter(genre){
@@ -883,6 +910,23 @@ let _renderTimer;
 function scheduleRender(){ clearTimeout(_renderTimer); _renderTimer=setTimeout(reScoreAndRender,60); }
 
 // Re-run scoring (and optionally map-building) without re-fetching
+function computeConformity(films, filmData){
+  if(!films||!filmData) return null;
+  const pairs=films.filter(f=>{
+    if(f.rating<=0) return false;
+    const d=filmData[f.name+'||'+f.year];
+    return d&&d.voteAvg!=null&&d.voteAvg>0;
+  });
+  if(pairs.length<10) return null;
+  const mad=pairs.reduce((s,f)=>{
+    const d=filmData[f.name+'||'+f.year];
+    return s+Math.abs(f.rating-d.voteAvg);
+  },0)/pairs.length;
+  const score=Math.max(0,Math.min(100,Math.round((1-mad/2)*100)));
+  const label=score>=85?'Mainstream':score>=70?'Generally Agrees':score>=55?'Independent Taste':score>=40?'Contrarian':'Rebel';
+  return{score,label,filmCount:pairs.length};
+}
+
 function reScoreAndRender(){
   if(!STATE._byDir) return;
   if(STATE._filmData && STATE._films){
@@ -892,7 +936,11 @@ function reScoreAndRender(){
     const maps=buildPersonMaps(films,STATE._filmData);
     STATE._byDir=maps.byDir; STATE._byWriter=maps.byWriter; STATE._byActor=maps.byActor;
     // Only update full genre list and global mean when not filtering
-    if(!STATE._activeGenre){ STATE.genres=maps.genres; STATE._globalMean=maps.globalMean; }
+    if(!STATE._activeGenre){
+      STATE.genres=maps.genres;
+      STATE._globalMean=maps.globalMean;
+      STATE._conformity=computeConformity(STATE._films,STATE._filmData);
+    }
   }
   STATE.directors=computeScores(STATE._byDir,STATE._globalMean);
   STATE.writers=computeScores(STATE._byWriter,STATE._globalMean);
