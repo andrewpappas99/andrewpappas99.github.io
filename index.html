@@ -88,7 +88,7 @@ input,select,button{font-family:inherit}
     <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
       <div style="font-size:26px;margin-bottom:10px">🎬</div>
       <div id="drop-label" style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop files here or click to browse</div>
-      <div style="color:#44445a;font-size:12px">diary.csv · ratings.csv · or a previously saved .json data file</div>
+      <div style="color:#44445a;font-size:12px">diary.csv · ratings.csv · watched.csv · or a previously saved .json data file</div>
       <input id="file-input" type="file" accept=".csv,.json" multiple style="display:none" onchange="handleFileInput(this.files)"/>
     </div>
     <!-- Config -->
@@ -125,7 +125,7 @@ input,select,button{font-family:inherit}
     <div style="max-width:440px;width:100%;animation:fadeUp .3s ease">
       <div class="eyebrow" style="margin-bottom:12px">One quick thing</div>
       <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:28px;margin:0 0 10px;color:#f0e8d8;font-weight:700">What's your name?</h2>
-      <p style="color:#66667a;font-size:14px;line-height:1.7;margin-bottom:28px">We'll personalize the graphic — <em style="color:#88889a">Andrew's Mount Rushmore</em>. Hit Enter or leave blank to skip.</p>
+      <p style="color:#66667a;font-size:14px;line-height:1.7;margin-bottom:28px">We'll personalize the graphic — <em style="color:#88889a">Marty's Mount Rushmore</em>. Hit Enter or leave blank to skip.</p>
       <input id="name-input" class="input-field" style="margin-bottom:12px" placeholder="Your first name…" onkeydown="if(event.key==='Enter')startAnalysis()"/>
       <div style="display:flex;gap:10px">
         <button class="btn-gold" style="flex:1" id="analyze-btn" onclick="startAnalysis()">Analyze →</button>
@@ -177,13 +177,14 @@ input,select,button{font-family:inherit}
         <button class="nav-tab" id="tab-btn-actors" onclick="switchCat('actors')">🎭 Actors</button>
       </div>
       <div style="flex:1"></div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
+      <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
         <button class="btn-gold btn-sm" onclick="shareResults()">🔗 Share</button>
         <button class="btn-ghost btn-sm" onclick="downloadPNG()">↓ PNG</button>
         <button class="btn-ghost btn-sm" onclick="exportCache()">↓ Save Data</button>
         <button class="btn-ghost btn-sm" onclick="openModal()">? How</button>
         <button class="btn-ghost btn-sm" onclick="toggleWeights()">⚖ Settings</button>
-        <button class="btn-ghost btn-sm" onclick="resetApp()">✕</button>
+        <span style="width:1px;height:20px;background:#1e1e2e;margin:0 6px;flex-shrink:0"></span>
+        <button class="btn-ghost btn-sm" onclick="resetApp()" style="color:#664444;border-color:#2a1a1a" title="Start over">✕</button>
       </div>
     </div>
     <!-- Weight sliders panel -->
@@ -197,12 +198,12 @@ input,select,button{font-family:inherit}
               <input type="range" min="0" max="100" value="65" id="sl-ratingSum" class="wslider" oninput="onSlider('ratingSum',this.value)"/>
             </div>
             <div class="slider-group">
-              <div class="slider-label">Taste Affinity <span id="lbl-top3Score" class="slider-val">25%</span></div>
-              <input type="range" min="0" max="100" value="25" id="sl-top3Score" class="wslider" oninput="onSlider('top3Score',this.value)"/>
+              <div class="slider-label">Taste Affinity <span id="lbl-top3Score" class="slider-val">30%</span></div>
+              <input type="range" min="0" max="100" value="30" id="sl-top3Score" class="wslider" oninput="onSlider('top3Score',this.value)"/>
             </div>
             <div class="slider-group">
-              <div class="slider-label">Rewatches <span id="lbl-rewatches" class="slider-val">10%</span></div>
-              <input type="range" min="0" max="100" value="10" id="sl-rewatches" class="wslider" oninput="onSlider('rewatches',this.value)"/>
+              <div class="slider-label">Rewatches <span id="lbl-rewatches" class="slider-val">5%</span></div>
+              <input type="range" min="0" max="100" value="5" id="sl-rewatches" class="wslider" oninput="onSlider('rewatches',this.value)"/>
             </div>
           </div>
           <button class="btn-ghost btn-sm" onclick="resetWeights()" style="margin-top:14px;flex-shrink:0">Reset</button>
@@ -244,7 +245,7 @@ input,select,button{font-family:inherit}
 <script src="film-db.js"></script>
 <script>
 // ─── Constants ────────────────────────────────────────────────────────────────
-let WEIGHTS = { ratingSum:.65, rewatches:.10, top3Score:.25 };
+let WEIGHTS = { ratingSum:.65, rewatches:.05, top3Score:.30 };
 // ratingSum = log2(filmCount+1)*avgRating (volume×quality), top3Score = personal taste affinity
 let MIN_FILMS = 3, TOP_ACTORS = 5;
 const TMDB_CONCURRENCY = 4;
@@ -310,12 +311,14 @@ function parseLetterboxdCSV(text){
   const header=parseCSVLine(lines[0]).map(h=>h.replace(/"/g,'').toLowerCase().trim());
   const gi=k=>header.findIndex(h=>h===k);
   const nameI=gi('name'),yearI=gi('year'),ratingI=gi('rating'),rewatchI=gi('rewatch');
-  if(nameI<0) throw new Error("No 'Name' column found. Upload diary.csv or ratings.csv.");
+  if(nameI<0) throw new Error("No 'Name' column found. Upload diary.csv, ratings.csv, or watched.csv.");
+  // watched.csv has no rating column — films count toward volume but are unrated
+  const isWatched=ratingI<0&&header.includes('letterboxd uri');
   const films=[];
   for(let i=1;i<lines.length;i++){
     const c=parseCSVLine(lines[i]);
     const name=(c[nameI]||'').replace(/"/g,'').trim(), year=parseInt(c[yearI]);
-    const rating=ratingI>=0?parseFloat(c[ratingI])||0:0;
+    const rating=isWatched?0:ratingI>=0?parseFloat(c[ratingI])||0:0;
     const rewatch=rewatchI>=0&&(c[rewatchI]||'').toLowerCase().trim()==='yes';
     if(name&&year) films.push({name,year,rating,rewatch});
   }
@@ -760,7 +763,7 @@ function renderCategoryPanel(cat){
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <input id="${searchId}" class="input-field" style="flex:1;min-width:180px" placeholder="Search ${catLabel.toLowerCase()}…" oninput="filterCat('${cat}')"/>
         <select id="${sortId}" class="input-field" style="width:auto;cursor:pointer;background:#0e0e1c;border-color:#252535;color:#88889a" onchange="filterCat('${cat}')">
-          <option value="score">Sort: Score</option><option value="films">Sort: Films Seen</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option><option value="name">Sort: Name A–Z</option>
+          <option value="score">Sort: Score</option><option value="logvq">Sort: Vol × Quality</option><option value="affinity">Sort: Taste Affinity</option><option value="films">Sort: Films Seen</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option><option value="name">Sort: Name A–Z</option>
         </select>
       </div>
     </div>
@@ -774,7 +777,7 @@ function filterCat(cat){
   const sort=(document.getElementById(`sort-${cat}`).value)||'score';
   const rankMap={}; STATE[cat].forEach((d,i)=>rankMap[d.name]=i+1);
   let data=[...STATE[cat]].filter(d=>!search||d.name.toLowerCase().includes(search));
-  data.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='films'?b.filmCount-a.filmCount:sort==='rating'?b.avgRating-a.avgRating:sort==='rewatches'?b.rewatchCount-a.rewatchCount:b.score-a.score);
+  data.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='films'?b.filmCount-a.filmCount:sort==='rating'?b.avgRating-a.avgRating:sort==='rewatches'?b.rewatchCount-a.rewatchCount:sort==='logvq'?b.logVQNorm-a.logVQNorm:sort==='affinity'?b.affinityScore-a.affinityScore:b.score-a.score);
   const grid=document.getElementById(`grid-${cat}`), empty=document.getElementById(`empty-${cat}`);
   if(!data.length){grid.innerHTML='';empty.style.display='block';}
   else{empty.style.display='none';grid.innerHTML=data.map(d=>personCardHTML(d,rankMap[d.name])).join('');}
@@ -859,7 +862,7 @@ function onSlider(key, val){
 }
 
 function resetWeights(){
-  const defaults={ratingSum:65,rewatches:10,top3Score:25};
+  const defaults={ratingSum:65,rewatches:5,top3Score:30};
   for(const [k,v] of Object.entries(defaults)){
     WEIGHTS[k]=v/100;
     document.getElementById('sl-'+k).value=v;
