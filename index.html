@@ -62,6 +62,9 @@ input,select,button{font-family:inherit}
 .modal-close{float:right;background:none;border:none;color:#55556a;font-size:20px;cursor:pointer;line-height:1}
 /* Genre bar */
 .genre-bar{height:6px;border-radius:3px;background:#c8a840;transition:width .4s ease}
+/* Clickable filmography-coverage bar */
+.cov-click{cursor:pointer;border-radius:5px;margin:-3px -5px;padding:3px 5px;transition:background .15s}
+.cov-click:hover{background:#ffffff0a}
 /* Mobile */
 @media(max-width:640px){
   .nav-inner{height:auto;padding:8px 12px;gap:6px}
@@ -188,6 +191,7 @@ input,select,button{font-family:inherit}
         <button class="nav-tab active" id="tab-btn-directors" onclick="switchCat('directors')">🎬 Directors</button>
         <button class="nav-tab" id="tab-btn-writers" onclick="switchCat('writers')">✍️ Writers</button>
         <button class="nav-tab" id="tab-btn-actors" onclick="switchCat('actors')">🎭 Actors</button>
+        <button class="nav-tab" id="tab-btn-recs" onclick="switchCat('recs')">🍿 Watch Next</button>
       </div>
       <div style="flex:1"></div>
       <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
@@ -231,6 +235,17 @@ input,select,button{font-family:inherit}
               <input type="range" min="1" max="10" value="5" id="sl-topActors" class="wslider" oninput="onSettingSlider('topActors',this.value)"/>
             </div>
           </div>
+          <!-- What counts as a "feature" for filmography coverage -->
+          <div style="display:flex;gap:20px;flex-wrap:wrap;border-left:1px solid #1e1e2e;padding-left:24px;margin-top:2px">
+            <div class="slider-group" style="min-width:170px">
+              <div class="slider-label">Feature length <span id="lbl-minRuntime" class="slider-val">40 min</span></div>
+              <input type="range" min="20" max="90" step="5" value="40" id="sl-minRuntime" class="wslider" oninput="onSettingSlider('minRuntime',this.value)"/>
+              <label style="display:flex;align-items:center;gap:6px;color:#77778a;font-size:11px;cursor:pointer;margin-top:7px">
+                <input type="checkbox" id="cb-countDocs" onchange="onCountDocs(this.checked)" style="accent-color:#c8a840;cursor:pointer"/>
+                Count documentaries
+              </label>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -256,6 +271,7 @@ input,select,button{font-family:inherit}
   <div id="cat-directors" class="wrap" style="padding-top:28px;padding-bottom:60px"></div>
   <div id="cat-writers"   class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="cat-actors"    class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
+  <div id="cat-recs"      class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
 </div>
 
 <script src="film-db.js"></script>
@@ -265,9 +281,34 @@ let WEIGHTS = { ratingSum:.65, rewatches:.05, top3Score:.30 };
 // ratingSum = log2(filmCount+1)*avgRating (volume×quality), top3Score = personal taste affinity
 let MIN_FILMS = 3, TOP_ACTORS = 5;
 const TMDB_CONCURRENCY = 4;
+// What counts as a "feature" is a judgement call, so both halves of it are live
+// settings: a length test (AMPAS uses 40 min) and a kind test (documentaries and
+// concert films are a different body of work for most directors — but not for
+// Herzog or Morris, hence the toggle).
+const FEATURE_MIN_RUNTIME = 40;      // default minutes; MIN_RUNTIME is the live value
+let MIN_RUNTIME = FEATURE_MIN_RUNTIME, COUNT_DOCS = false;
+const FILMOG_CACHE_KEY = 'cmr_filmog_v4';   // v4 caches runtime/rating/genres so settings apply without refetching
+
+// ─── Recommendations ──────────────────────────────────────────────────────────
+// Every mode blends the same three axes; they differ only in emphasis, so each
+// one still mixes "directors you love" with "filmographies you're close to".
+//   affinity   — how highly the director scores on your own list
+//   completion — how near you are to finishing them (far along AND few left)
+//   acclaim    — the film's own standing (TMDB popularity rank + rating)
+const REC_MODES = {
+  balanced:      {label:'Balanced',      icon:'🎯', hint:'A bit of everything',            affinity:.40, completion:.30, acclaim:.30, invert:false},
+  completionist: {label:'Completionist', icon:'🏁', hint:'Finish what you started',        affinity:.20, completion:.65, acclaim:.15, invert:false},
+  essentials:    {label:'Essentials',    icon:'⭐', hint:'The famous ones you have missed', affinity:.30, completion:.10, acclaim:.60, invert:false},
+  deepcuts:      {label:'Deep Cuts',     icon:'🔦', hint:'Obscure films by directors you love', affinity:.50, completion:.15, acclaim:.35, invert:true}
+};
+const REC_LIMIT = 36;
+const FILMOG_MAX_CREDITS = 150;      // cap on per-director runtime lookups
+const FILMOG_CACHE_MAX = 120;        // directors kept in localStorage
 const RANK_COLORS = ['#ffd700','#d4d4d4','#cd7f32','#9999bb'];
 const CAT_LABELS  = { directors:'Directors', writers:'Writers', actors:'Actors' };
 const CAT_ICONS   = { directors:'🎬', writers:'✍️', actors:'🎭' };
+const CATS        = ['directors','writers','actors'];   // scored person categories
+const TABS        = [...CATS,'recs'];                   // + the recommendations panel
 const TMDB_GENRES = {28:'Action',12:'Adventure',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',14:'Fantasy',36:'History',27:'Horror',10402:'Music',9648:'Mystery',10749:'Romance',878:'Sci-Fi',53:'Thriller',10752:'War',37:'Western'};
 
 // ─── Built-in Film Database ───────────────────────────────────────────────────
@@ -283,7 +324,8 @@ function lookupFromDB(film){
     writers:parts[1]?parts[1].split(','):[],
     actors:parts[2]?parts[2].split(','):[],
     genres:parts[3]?parts[3].split(','):[],
-    voteAvg:parts[4]?parseFloat(parts[4]):null
+    voteAvg:parts[4]?parseFloat(parts[4]):null,
+    runtime:parts[5]?parseInt(parts[5],10):null   // absent in DBs built before the runtime upgrade
   };
 }
 
@@ -291,7 +333,7 @@ function lookupFromDB(film){
 const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
   runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0,
-  _activeGenre:null };
+  _activeGenre:null, _filmog:{}, recMode:'balanced' };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -512,9 +554,13 @@ function handleFileInput(files){
         if(!d.version||!d.directors) throw new Error('Invalid cache file.');
         STATE.userName=d.userName||'';
         STATE.genres=d.genres||[];
+        // Merge any exact filmographies from the file over what this browser already cached
+        STATE._filmog=Object.assign(loadFilmogCache(),sanitizeFilmog(d.filmog));
         // Restore scoring settings if present
         if(typeof d.minFilms==='number'){ MIN_FILMS=d.minFilms; const el=document.getElementById('sl-minFilms'); if(el){el.value=MIN_FILMS;document.getElementById('lbl-minFilms').textContent=MIN_FILMS;} }
         if(typeof d.topActors==='number'){ TOP_ACTORS=d.topActors; const el=document.getElementById('sl-topActors'); if(el){el.value=TOP_ACTORS;document.getElementById('lbl-topActors').textContent=TOP_ACTORS;} }
+        if(typeof d.minRuntime==='number'&&d.minRuntime>=20&&d.minRuntime<=90){ MIN_RUNTIME=d.minRuntime; const el=document.getElementById('sl-minRuntime'); if(el){el.value=MIN_RUNTIME;document.getElementById('lbl-minRuntime').textContent=MIN_RUNTIME+' min';} }
+        if(typeof d.countDocs==='boolean'){ COUNT_DOCS=d.countDocs; const el=document.getElementById('cb-countDocs'); if(el) el.checked=COUNT_DOCS; }
         // Version 3+: has raw filmData → full slider support
         if(d.version>=3 && d.filmData && d.films){
           if(!d.films.length||!Object.keys(d.filmData).length) throw new Error('Cache file has no film data.');
@@ -605,16 +651,20 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null; document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';_dirByName=null; document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
   const payload={
-    version:3,
+    version:5,
     userName:STATE.userName,
     exportedAt:new Date().toISOString(),
     minFilms:MIN_FILMS,
     topActors:TOP_ACTORS,
+    minRuntime:MIN_RUNTIME,
+    countDocs:COUNT_DOCS,
+    // Exact TMDB filmographies — expensive to fetch, so carry them along
+    filmog:STATE._filmog||{},
     directors:STATE.directors,
     writers:STATE.writers,
     actors:STATE.actors,
@@ -681,7 +731,9 @@ function buildExportSVG(top4,label){
 
 // ─── PNG Download ─────────────────────────────────────────────────────────────
 function downloadPNG(){
-  const cat=STATE.currentCat, top4=STATE[cat].slice(0,4);
+  const cat=STATE.currentCat;
+  if(!CATS.includes(cat)){ showToast('Open a Rushmore tab to export a PNG'); return; }
+  const top4=STATE[cat].slice(0,4);
   if(!top4.length){alert('No data for '+CAT_LABELS[cat]+' yet.');return;}
   const un=STATE.userName, label=`${un?un+"'s ":''}${CAT_LABELS[cat]} Mount Rushmore`;
   const svgStr=buildExportSVG(top4,label);
@@ -697,10 +749,344 @@ function downloadPNG(){
 
 function triggerDownload(filename,mime,data){const a=document.createElement('a');a.download=filename;a.href='data:'+mime+';charset=utf-8,'+encodeURIComponent(data);a.click();}
 
+// ─── Filmography Coverage ─────────────────────────────────────────────────────
+// "What share of this director's feature filmography have you seen?"
+//
+// Two tiers, because the answer needs a denominator the export can't provide:
+//   db   — reverse-index the built-in FILM_DB by director. Instant and key-free,
+//          but the DB is TMDB's top ~20k films by popularity, so it lists a
+//          director's notable work rather than everything they made.
+//   tmdb — fetch the real directing credits and keep the ones running 40+ min.
+//          Exact, but costs one request per credit, so it runs on demand.
+// Either way the denominator is unioned with the films you actually logged, so
+// coverage can never exceed 100% and never drops a film you've seen.
+
+let _dirIndex=null;
+function directorIndex(){
+  if(_dirIndex) return _dirIndex;
+  _dirIndex=Object.create(null);   // null proto: director names like "constructor" must not collide
+  const thisYear=new Date().getFullYear();
+  let rank=-1;
+  for(const key in FILM_DB){
+    rank++;                       // insertion order = descending TMDB popularity
+    const entry=FILM_DB[key];
+    const p=entry.indexOf('|');
+    const dir=p<0?entry:entry.slice(0,p);
+    if(!dir) continue;
+    const i=key.lastIndexOf('||');
+    const y=parseInt(key.slice(i+2),10);
+    // FILM_DB stores a year but no release date, and TMDB's popularity export
+    // includes announced films. Counting only completed years is the one rule
+    // that can't recommend something that isn't out yet; it costs a handful of
+    // current-year titles. The TMDB tier has real dates and is exact.
+    if(!Number.isFinite(y)||y>=thisYear) continue;
+    // Fields: 0 director |1 writers |2 actors |3 genres |4 voteAvg |5 runtime.
+    // Find the first five pipes in one pass rather than splitting 20k long strings.
+    const pipes=[];
+    for(let j=0;j<entry.length&&pipes.length<5;j++) if(entry.charCodeAt(j)===124) pipes.push(j);
+    // slice(x, undefined) runs to the end, which is exactly right for 4-field DBs
+    const g=pipes.length>2?entry.slice(pipes[2]+1,pipes[3]):'';
+    const va=pipes.length>3?parseFloat(entry.slice(pipes[3]+1,pipes[4])):NaN;
+    // Runtime exists only in the 6-field format; older DBs end in a genre list or
+    // a "4.0"-style average, neither of which is a bare integer.
+    const tail=pipes.length>4?entry.slice(pipes[4]+1):'';
+    const rt=/^\d+$/.test(tail)?parseInt(tail,10):0;
+    const title=key.slice(0,i);
+    // Store unfiltered — MIN_RUNTIME and COUNT_DOCS are applied at display time.
+    // rank is the film's position in the DB, which build-db.js writes in
+    // descending TMDB popularity — a free popularity signal for recommendations.
+    (_dirIndex[dir]||(_dirIndex[dir]=[])).push({
+      t:normTitle(title),y,title,rt,g,
+      va:Number.isFinite(va)?va:null,
+      rank:rank,
+      doc:g.split(',').indexOf('Documentary')>=0
+    });
+  }
+  return _dirIndex;
+}
+
+// The live definition of "feature", applied to both tiers.
+// rt of 0 means the source didn't report a runtime — keep it rather than guess.
+function isFeature(f){
+  if(!COUNT_DOCS&&f.doc) return false;
+  return !f.rt||f.rt>=MIN_RUNTIME;
+}
+
+// Titles arrive from three sources with different spellings — normalize hard.
+const DIACRITICS=new RegExp('[\\u0300-\\u036f]','g');   // combining marks left by NFD
+function normTitle(t){
+  return String(t).toLowerCase()
+    .normalize('NFD').replace(DIACRITICS,'')
+    .replace(/^(the|a|an)\s+/,'')
+    .replace(/[^a-z0-9]+/g,'');
+}
+
+// Same title within ±1 year = same film (release years disagree across sources).
+// Returns true when the film was new to the set — that's how we spot the ones
+// in a filmography that no logged film accounts for.
+function addFilm(set,f){
+  if(!f.t||!Number.isFinite(f.y)) return false;
+  const years=set.get(f.t);
+  if(!years){ set.set(f.t,[f.y]); return true; }
+  if(years.some(y=>Math.abs(y-f.y)<=1)) return false;
+  years.push(f.y); return true;
+}
+
+function coverageFrom(filmography,seen){
+  const all=new Map();
+  let seenCount=0;
+  for(const f of seen) if(addFilm(all,f)) seenCount++;
+  const missing=[];
+  for(const f of filmography) if(addFilm(all,f)) missing.push(f);
+  const total=seenCount+missing.length;
+  return {seen:seenCount,total,pct:total?Math.round(seenCount/total*100):0,missing};
+}
+
+function getCoverage(d){
+  if(!d) return null;
+  const seen=(d.films||[]).map(f=>({t:normTitle(f.name),y:f.year,title:f.name}));
+  const rec=STATE._filmog&&STATE._filmog[d.name];
+  if(rec){
+    const all=rec.f.map(a=>{
+      const g=a[5]||'';
+      // doc is derived from genres rather than stored, so one field can't contradict the other
+      return {t:a[0],y:a[1],title:a[2]||a[0],rt:a[3]||0,va:a[4]||null,g,rank:null,
+              doc:g.split(',').indexOf('Documentary')>=0};
+    });
+    const cov=coverageFrom(all.filter(isFeature),seen);
+    return Object.assign(cov,{source:'tmdb',truncated:!!rec.tr,excluded:all.length-all.filter(isFeature).length});
+  }
+  const filmog=directorIndex()[d.name];
+  if(!filmog||!filmog.length) return null;
+  const kept=filmog.filter(isFeature);
+  return Object.assign(coverageFrom(kept,seen),{source:'db',truncated:false,excluded:filmog.length-kept.length});
+}
+
+// ─── Exact filmography via TMDB ───────────────────────────────────────────────
+async function fetchDirectorFilmography(name, apiKey){
+  const base='https://api.themoviedb.org/3';
+  let res=await fetch(`${base}/search/person?api_key=${apiKey}&query=${encodeURIComponent(name)}&language=en-US`);
+  if(res.status===401) throw new Error('TMDB_AUTH');
+  if(!res.ok) return null;
+  const results=(await res.json()).results||[];
+  // Prefer an exact name match, then someone TMDB considers a director
+  const exact=results.filter(p=>p.name&&p.name.toLowerCase()===name.toLowerCase());
+  const pool=exact.length?exact:results;
+  const person=pool.find(p=>p.known_for_department==='Directing')||pool[0];
+  if(!person) return null;
+
+  res=await fetch(`${base}/person/${person.id}/movie_credits?api_key=${apiKey}&language=en-US`);
+  if(res.status===401) throw new Error('TMDB_AUTH');
+  if(!res.ok) return null;
+  const crew=(await res.json()).crew||[];
+
+  const today=new Date().toISOString().slice(0,10);
+  const seenIds=new Set(), credits=[];
+  for(const c of crew){
+    if(c.job!=='Director'||c.adult) continue;
+    const rd=c.release_date||'';
+    if(!rd||rd>today) continue;            // unreleased or undated
+    if(seenIds.has(c.id)) continue;        // a film can carry the same credit twice
+    seenIds.add(c.id);
+    credits.push({id:c.id,title:c.title||c.original_title||'',year:parseInt(rd.slice(0,4),10),votes:c.vote_count||0});
+  }
+  if(!credits.length) return null;
+
+  // movie_credits carries neither runtime nor full genres, so each credit needs a
+  // detail call. Best-known credits first, so the cap (if it ever bites) drops
+  // obscure entries rather than the famous ones.
+  credits.sort((a,b)=>b.votes-a.votes);
+  const capped=credits.slice(0,FILMOG_MAX_CREDITS);
+  const films=[];
+  for(let i=0;i<capped.length;i+=TMDB_CONCURRENCY){
+    await Promise.all(capped.slice(i,i+TMDB_CONCURRENCY).map(async c=>{
+      try{
+        const r=await fetch(`${base}/movie/${c.id}?api_key=${apiKey}&language=en-US`);
+        if(!r.ok) return;
+        const m=await r.json();
+        // Keep every credit and tag it — MIN_RUNTIME and COUNT_DOCS are applied
+        // at display time, so changing them never costs another round of requests.
+        const g=(m.genres||[]).map(x=>x.name).join(',');
+        films.push({
+          t:normTitle(c.title), y:c.year, title:c.title,
+          rt:parseInt(m.runtime,10)||0,
+          va:m.vote_average?m.vote_average/2:null,   // TMDB 0-10 -> the app's 0-5
+          g
+        });
+      }catch(e){ console.warn('Detail lookup failed for',c.title,e); }
+    }));
+    if(i+TMDB_CONCURRENCY<capped.length) await sleep(120);
+  }
+  return {personId:person.id, films, truncated:credits.length>capped.length};
+}
+
+// ─── Coverage cache (survives reloads — the TMDB pass is expensive) ───────────
+function loadFilmogCache(){
+  try{ return sanitizeFilmog(JSON.parse(localStorage.getItem(FILMOG_CACHE_KEY))); }catch(e){ return {}; }
+}
+function saveFilmogCache(c){
+  try{
+    const names=Object.keys(c);
+    if(names.length>FILMOG_CACHE_MAX){
+      names.sort((a,b)=>(c[a].at||0)-(c[b].at||0));
+      names.slice(0,names.length-FILMOG_CACHE_MAX).forEach(n=>delete c[n]);
+    }
+    localStorage.setItem(FILMOG_CACHE_KEY,JSON.stringify(c));
+  }catch(e){ /* quota or private mode — the in-memory copy still works this session */ }
+}
+// Coverage records also ride along in exported .json files, so validate on the way in
+function sanitizeFilmog(raw){
+  const out={};
+  if(!raw||typeof raw!=='object') return out;
+  for(const name of Object.keys(raw).slice(0,300)){
+    const r=raw[name];
+    if(!r||!Array.isArray(r.f)) continue;
+    const f=r.f.filter(a=>Array.isArray(a)&&typeof a[0]==='string'&&Number.isFinite(a[1]))
+               .slice(0,400)
+               .map(a=>[a[0].slice(0,80),a[1],(typeof a[2]==='string'?a[2]:a[0]).slice(0,120),
+                        Number.isFinite(a[3])?a[3]:0,
+                        Number.isFinite(a[4])?Math.min(5,Math.max(0,a[4])):null,
+                        typeof a[5]==='string'?a[5].slice(0,120):'']);
+    if(f.length) out[String(name).slice(0,120)]={at:Number(r.at)||Date.now(),f,tr:!!r.tr};
+  }
+  return out;
+}
+
+// ─── Refine (DB estimate → exact TMDB figure) ─────────────────────────────────
+const _refiningNames=new Set();
+
+async function refineCoverage(name, quiet){
+  const key=getKey('tmdb');
+  if(!key){ showToast('Add a TMDB API key in ⚙ Setup for exact filmographies'); return false; }
+  if(_refiningNames.has(name)||STATE._filmog[name]) return false;
+  const cache=loadFilmogCache();
+  if(cache[name]){ STATE._filmog[name]=cache[name]; updateCoverageBlocks(name); return true; }
+
+  _refiningNames.add(name); updateCoverageBlocks(name);
+  let ok=false;
+  try{
+    const r=await fetchDirectorFilmography(name,key);
+    if(r&&r.films.length){
+      const rec={at:Date.now(),f:r.films.map(f=>[f.t,f.y,f.title,f.rt,f.va,f.g]),tr:r.truncated};
+      STATE._filmog[name]=rec;
+      cache[name]=rec; saveFilmogCache(cache);
+      ok=true;
+    } else if(!quiet){ showToast('No TMDB filmography found for '+name); }
+  }catch(e){
+    console.warn('Filmography lookup failed for',name,e);
+    if(!quiet) showToast(e.message==='TMDB_AUTH'?'Invalid TMDB API key — check ⚙ Setup':'Filmography lookup failed');
+  }finally{
+    _refiningNames.delete(name);
+    updateCoverageBlocks(name);
+  }
+  return ok;
+}
+
+async function refineTopCoverage(){
+  if(!getKey('tmdb')){ showToast('Add a TMDB API key in ⚙ Setup for exact filmographies'); return; }
+  const names=STATE.directors.slice(0,4).map(d=>d.name).filter(n=>!STATE._filmog[n]);
+  if(!names.length){ showToast('Top 4 filmographies are already exact'); return; }
+  let n=0;
+  for(const name of names){ if(await refineCoverage(name,true)) n++; }
+  showToast(n?`Exact filmography for ${n} director${n!==1?'s':''}`:'Could not fetch filmographies');
+}
+
+// ─── Coverage UI ──────────────────────────────────────────────────────────────
+let _dirByName=null;
+function dirByName(name){
+  if(!_dirByName){ _dirByName=Object.create(null); (STATE.directors||[]).forEach(d=>{_dirByName[d.name]=d;}); }
+  return _dirByName[name];
+}
+
+function coverageInnerHTML(name,ac){
+  const row=(right,pct)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;gap:8px">
+      <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Filmography</span>
+      <span style="color:#66667a;font-size:9px;white-space:nowrap">${right}</span>
+    </div>
+    <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px;transition:width .3s ease"></div>
+    </div>`;
+
+  if(_refiningNames.has(name)) return row('<span style="color:#c8a840">looking up…</span>',100);
+  const cov=getCoverage(dirByName(name));
+  if(!cov) return '';
+
+  const exact=cov.source==='tmdb';
+  const tip=(exact
+    ? `${cov.seen} of ${cov.total}${cov.truncated?'+':''} films ${name} directed, per TMDB, counting ${MIN_RUNTIME}+ minute ${COUNT_DOCS?'films including documentaries':'narrative films'}.`
+    : `Estimated against the built-in database, which lists their best-known work rather than every title.`)
+    +` Click to see the ${cov.missing.length} you haven't seen.`;
+  return `<div class="cov-click" title="${esc(tip)}" onclick="openFilmogModal(${esc(JSON.stringify(name))})">${
+    row(`${exact?'':'≈ '}${cov.seen} / ${cov.total}${cov.truncated?'+':''} · ${cov.pct}%<span style="color:${ac};margin-left:5px">›</span>`,cov.pct)
+  }</div>`;
+}
+
+// ─── Missing-films modal ──────────────────────────────────────────────────────
+let _filmogModalName=null;
+function openFilmogModal(name){ _filmogModalName=name; renderFilmogModal(); document.getElementById('filmog-modal').classList.add('open'); }
+function closeFilmogModal(){ _filmogModalName=null; document.getElementById('filmog-modal').classList.remove('open'); }
+
+function renderFilmogModal(){
+  const name=_filmogModalName, body=document.getElementById('filmog-modal-body');
+  if(!name||!body) return;
+  const d=dirByName(name), cov=d?getCoverage(d):null;
+  if(!cov){ body.innerHTML=`<div style="color:#66667a;font-size:13px">No filmography data for ${esc(name)}.</div>`; return; }
+
+  const exact=cov.source==='tmdb', hasKey=!!getKey('tmdb'), loading=_refiningNames.has(name);
+  const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
+  const row=(year,title,right)=>`<div style="display:flex;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid #14141f">
+      <span class="mono" style="color:#3a3a52;font-size:11px;flex-shrink:0;width:36px">${Number.isFinite(year)?year:'—'}</span>
+      <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(title)}</span>${right||''}</div>`;
+
+  const missing=[...cov.missing].sort((a,b)=>a.y-b.y);
+  const seenFilms=[...(d.films||[])].sort((a,b)=>a.year-b.year);
+  const source=exact
+    ? `<span style="color:#4a9a4a">✓ Exact — released films they directed, from TMDB${cov.truncated?`, capped at the ${FILMOG_MAX_CREDITS} best-known credits`:''}.</span>`
+    : `<span style="color:#998870">≈ Estimated from the built-in database of ${Object.keys(FILM_DB).length.toLocaleString()} popular films. It holds their best-known work, so the real filmography is usually larger and this list is incomplete.</span>`;
+  const rule=`<div style="color:#55556a;font-size:11px;line-height:1.65;margin-top:5px">
+      Counting ${MIN_RUNTIME}+ minute ${COUNT_DOCS?'films including documentaries':'narrative films — documentaries and concert films excluded'}.
+      ${cov.excluded?`<span style="color:#44445a">${cov.excluded} credit${cov.excluded!==1?'s':''} filtered out.</span>`:''}
+      <span style="color:#44445a">Change this under ⚖ Settings.</span>
+    </div>`;
+
+  body.innerHTML=`
+    <div class="eyebrow" style="margin-bottom:10px">Filmography</div>
+    <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:8px">${esc(name)}</h2>
+    <div style="color:#c8a840;margin-bottom:10px"><span class="mono" style="font-size:22px;font-weight:bold">${cov.pct}%</span>
+      <span style="color:#77778a;font-size:13px;margin-left:6px">${cov.seen} of ${cov.total}${cov.truncated?'+':''} feature${cov.total!==1?'s':''} seen</span></div>
+    <div class="progress-bar" style="margin-bottom:12px"><div class="progress-fill" style="width:${cov.pct}%"></div></div>
+    <div style="font-size:11px;line-height:1.65;margin-bottom:16px">${source}${rule}</div>
+    ${exact?'':`<div style="margin-bottom:22px">
+      ${loading
+        ? `<button class="btn-ghost btn-sm" disabled style="opacity:.55">Fetching from TMDB…</button>`
+        : `<button class="btn-gold btn-sm" onclick="refineCoverage(${esc(JSON.stringify(name))})">⟳ Get exact filmography</button>`}
+      ${hasKey?'':`<div style="color:#44445a;font-size:11px;margin-top:7px">Needs a free TMDB API key — add one under ⚙ API Key Setup on the upload screen.</div>`}
+    </div>`}
+    <div style="margin-bottom:22px">
+      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Not seen <span style="color:#44445a">(${missing.length})</span></div>
+      ${missing.length?missing.map(f=>row(f.y,f.title,'')).join(''):`<div style="color:#4a9a4a;font-size:13px">You've seen every film listed here.</div>`}
+    </div>
+    <div>
+      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Seen <span style="color:#44445a">(${seenFilms.length})</span></div>
+      ${seenFilms.map(f=>row(f.year,f.name,f.rating>0
+        ? `<span style="color:#c8a840;font-size:11px;flex-shrink:0">${stars(f.rating)}</span>`
+        : `<span style="color:#33334a;font-size:11px;flex-shrink:0">watched</span>`)).join('')}
+    </div>`;
+}
+
+function updateCoverageBlocks(name){
+  document.querySelectorAll('.cov-block').forEach(el=>{
+    if(el.dataset.person!==name) return;   // compare in JS — names break CSS attribute selectors
+    el.innerHTML=coverageInnerHTML(name,el.dataset.ac||'#c8a840');
+  });
+  if(_filmogModalName===name) renderFilmogModal();   // keep an open modal in step
+  renderRecsPanel();                                 // a fuller filmography changes the pool
+}
+
 // ─── Person Card HTML ─────────────────────────────────────────────────────────
 function pipsHTML(val,col){let h='<div style="display:flex;gap:2px;align-items:center">';for(let i=0;i<10;i++)h+=`<div style="width:11px;height:3px;border-radius:2px;background:${(i/10)*5<val?col:'#1e1e2e'}"></div>`;h+=`<span style="color:#888;font-size:11px;margin-left:5px">${val?val.toFixed(2):'—'}</span></div>`;return h;}
 
-function personCardHTML(d,rank){
+function personCardHTML(d,rank,cat){
   const ac=rank<=4?RANK_COLORS[rank-1]:'#557799';
   const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
   const watchedUnrated=d.films.filter(f=>f.rating===0);
@@ -743,6 +1129,7 @@ function personCardHTML(d,rank){
           <div style="height:100%;width:${Math.round((d.affinityScore||0)*100)}%;background:linear-gradient(90deg,#c8a84088,#c8a840);border-radius:2px"></div>
         </div>
       </div>
+      ${cat==='directors'?`<div class="cov-block" data-person="${esc(d.name)}" data-ac="${ac}">${coverageInnerHTML(d.name,ac)}</div>`:''}
     </div>
     ${d.topFilms.length?`<div><div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
   </div>`;
@@ -765,7 +1152,7 @@ function renderCategoryPanel(cat){
   // Search/sort state per category (stored on window for simplicity)
   const searchId=`search-${cat}`, sortId=`sort-${cat}`;
 
-  const top4CardsHTML=top4.map((d,i)=>personCardHTML(d,i+1)).join('');
+  const top4CardsHTML=top4.map((d,i)=>personCardHTML(d,i+1,cat)).join('');
   const alsoHTML=data.slice(4,14).map((d,i)=>`<div class="also-chip"><span style="color:#33334a;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(d.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</span></div>`).join('');
 
   return `
@@ -779,6 +1166,8 @@ function renderCategoryPanel(cat){
       <div style="font-size:11px"><span style="color:#77778a">Taste Affinity</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.top3Score*100)}%</span></div>
       <div style="font-size:11px"><span style="color:#77778a">Rewatches</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.rewatches*100)}%</span></div>
       <div style="font-size:11px"><span style="color:#77778a">Min films</span><span style="color:#c8a84077;margin-left:5px">${MIN_FILMS}</span></div>
+      ${cat==='directors'?`<div style="flex:1"></div>
+      <button onclick="refineTopCoverage()" title="Fetch each director's full feature filmography from TMDB for exact coverage" style="background:none;border:1px solid #252535;border-radius:6px;padding:3px 10px;color:#77778a;font-family:inherit;font-size:11px;cursor:pointer">⟳ Exact filmography</button>`:''}
     </div>
     <div class="ornament-rule">◆</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:32px">${top4CardsHTML}</div>
@@ -789,7 +1178,7 @@ function renderCategoryPanel(cat){
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <input id="${searchId}" class="input-field" style="flex:1;min-width:180px" placeholder="Search ${catLabel.toLowerCase()}…" oninput="filterCat('${cat}')"/>
         <select id="${sortId}" class="input-field" style="width:auto;cursor:pointer;background:#0e0e1c;border-color:#252535;color:#88889a" onchange="filterCat('${cat}')">
-          <option value="score">Sort: Score</option><option value="logvq">Sort: Vol × Quality</option><option value="affinity">Sort: Taste Affinity</option><option value="rated">Sort: Films Rated</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option><option value="name">Sort: Name A–Z</option>
+          <option value="score">Sort: Score</option><option value="logvq">Sort: Vol × Quality</option><option value="affinity">Sort: Taste Affinity</option><option value="rated">Sort: Films Rated</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option>${cat==='directors'?'<option value="coverage">Sort: Filmography %</option>':''}<option value="name">Sort: Name A–Z</option>
         </select>
       </div>
     </div>
@@ -798,25 +1187,145 @@ function renderCategoryPanel(cat){
   `;
 }
 
+// ─── Recommendations ──────────────────────────────────────────────────────────
+// The candidate pool is already sitting there: every director's `missing` list is
+// exactly "films by someone you like that you haven't seen". All this does is
+// rank that pool three ways and blend the axes per mode.
+function buildRecommendations(mode){
+  const w=REC_MODES[mode]||REC_MODES.balanced;
+  const dbSize=Object.keys(FILM_DB).length||1;
+  const maxScore=STATE.directors.reduce((m,d)=>Math.max(m,d.score),0)||1;
+  const wSum=(w.affinity+w.completion+w.acclaim)||1;
+  const byFilm=new Map();
+
+  for(let di=0;di<STATE.directors.length;di++){
+    const d=STATE.directors[di];
+    const cov=getCoverage(d);
+    if(!cov||!cov.missing.length) continue;
+    const affinity=d.score/maxScore;
+    const remaining=cov.missing.length;
+    // Being close to done is two things: far along, and few left to go.
+    // log2 keeps "3 left of 30" meaningfully ahead of "20 left of 40".
+    const completion=0.5*(cov.pct/100)+0.5*(1/Math.log2(remaining+2));
+
+    for(const f of cov.missing){
+      if(STATE._activeGenre&&f.g&&f.g.split(',').indexOf(STATE._activeGenre)<0) continue;
+      // Films absent from the DB aren't in TMDB's top 20k, so they're genuinely niche
+      const pop=Number.isFinite(f.rank)?1-f.rank/dbSize:0.15;
+      const q=f.va?Math.min(1,f.va/5):null;
+      const acclaim=w.invert
+        ? (q!=null?0.5*(1-pop)+0.5*q:1-pop)     // obscure, but still good
+        : (q!=null?0.65*pop+0.35*q:pop);
+      const score=(w.affinity*affinity+w.completion*completion+w.acclaim*acclaim)/wSum;
+      const key=f.t+'#'+f.y;
+      const prev=byFilm.get(key);
+      if(prev&&prev.score>=score) continue;     // co-directed films can surface twice
+      byFilm.set(key,{title:f.title,year:f.y,genres:f.g||'',va:f.va||null,rank:f.rank,pop,
+        director:d.name,dirRank:di+1,remaining,covPct:cov.pct,covSeen:cov.seen,covTotal:cov.total,
+        exact:cov.source==='tmdb',score});
+    }
+  }
+  return [...byFilm.values()].sort((a,b)=>b.score-a.score).slice(0,REC_LIMIT);
+}
+
+function setRecMode(mode){
+  if(!REC_MODES[mode]) return;
+  STATE.recMode=mode;
+  renderRecsPanel();
+}
+
+function recCardHTML(r,i){
+  const ac=r.dirRank<=4?RANK_COLORS[r.dirRank-1]:'#557799';
+  const chip=(txt,col)=>`<span style="background:${col}14;border:1px solid ${col}33;color:${col};border-radius:20px;padding:2px 9px;font-size:10px;white-space:nowrap">${txt}</span>`;
+  const chips=[];
+  if(r.remaining<=3) chips.push(chip(`${r.remaining} from complete`,'#4a9a6a'));
+  if(r.dirRank<=4) chips.push(chip(`Your #${r.dirRank} director`,ac));
+  if(Number.isFinite(r.rank)&&r.rank<2500) chips.push(chip('Popular','#c8a840'));
+  if(!Number.isFinite(r.rank)) chips.push(chip('Deep cut','#66667a'));
+  if(r.va) chips.push(chip('★'+r.va.toFixed(1),'#8888aa'));
+  const search=`https://letterboxd.com/search/films/${encodeURIComponent(r.title)}/`;
+  return `<div class="card" style="border:1px solid ${ac}22">
+    <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:6px">
+      <span class="mono" style="color:#2a2a3a;font-size:11px;flex-shrink:0">${String(i+1).padStart(2,'0')}</span>
+      <div style="flex:1;min-width:0">
+        <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(r.title)}</div>
+        <div style="color:#66667a;font-size:11px;margin-top:2px">${Number.isFinite(r.year)?r.year:'—'} · ${esc(r.director)}</div>
+      </div>
+    </div>
+    <div style="color:#55556a;font-size:11px;margin-bottom:9px">
+      You've seen <span class="mono" style="color:#88889a">${r.covSeen}/${r.covTotal}</span> of their features${r.exact?'':' <span style="color:#3a3a52">(est.)</span>'}
+    </div>
+    <div style="height:3px;background:#1a1a2a;border-radius:2px;overflow:hidden;margin-bottom:10px">
+      <div style="height:100%;width:${r.covPct}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px"></div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${chips.join('')}</div>
+    <a href="${esc(search)}" target="_blank" rel="noopener noreferrer" style="color:${ac};font-size:11px;text-decoration:none;border-bottom:1px solid ${ac}44">Find on Letterboxd →</a>
+  </div>`;
+}
+
+function renderRecsPanel(){
+  const el=document.getElementById('cat-recs');
+  if(!el) return;
+  const mode=STATE.recMode, w=REC_MODES[mode]||REC_MODES.balanced;
+  const tabs=Object.keys(REC_MODES).map(k=>{
+    const m=REC_MODES[k], on=k===mode;
+    return `<button onclick="setRecMode('${k}')" title="${esc(m.hint)}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:6px 14px;cursor:pointer;font-family:inherit;font-size:12px;transition:all .15s">${m.icon} ${esc(m.label)}</button>`;
+  }).join('');
+
+  if(!STATE.directors.length){
+    el.innerHTML=`<div style="text-align:center;padding:80px 0;color:#33334a">
+      <div style="font-size:32px;margin-bottom:12px">🍿</div>
+      <div style="font-size:15px">No directors qualify yet — lower “Min films to qualify” in ⚖ Settings.</div></div>`;
+    return;
+  }
+
+  const recs=buildRecommendations(mode);
+  const header=`
+    <div style="margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:5px">🍿 What to Watch Next</div>
+      <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(STATE.userName?STATE.userName+"'s Watchlist":'Your Watchlist')}</h1>
+      <p style="color:#66667a;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">
+        Unseen films from the directors you rate highest, weighted toward the filmographies you're closest to finishing.
+      </p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${tabs}</div>
+    <div style="color:#44445a;font-size:11px;margin-bottom:20px">${esc(w.hint)} — director affinity ${Math.round(w.affinity*100)}% · completion ${Math.round(w.completion*100)}% · ${w.invert?'obscurity':'acclaim'} ${Math.round(w.acclaim*100)}%</div>`;
+
+  if(!recs.length){
+    el.innerHTML=header+`<div style="text-align:center;padding:60px 0;color:#33334a">
+      <div style="font-size:15px">Nothing to recommend${STATE._activeGenre?' in '+esc(STATE._activeGenre):''} — you've seen everything we know of.</div>
+      <div style="font-size:12px;margin-top:8px;color:#2a2a3a">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>`;
+    return;
+  }
+  el.innerHTML=header+`<div class="dir-grid">${recs.map(recCardHTML).join('')}</div>
+    <div style="color:#2a2a3a;font-size:11px;margin-top:20px;line-height:1.7">
+      Drawn from ${STATE.directors.length} qualifying directors. Coverage marked “est.” comes from the built-in database,
+      which only lists a director's best-known work — run ⟳ Exact filmography on the Directors tab for the full picture.
+    </div>`;
+}
+
 function filterCat(cat){
   const search=(document.getElementById(`search-${cat}`).value||'').toLowerCase();
   const sort=(document.getElementById(`sort-${cat}`).value)||'score';
   const rankMap={}; STATE[cat].forEach((d,i)=>rankMap[d.name]=i+1);
   let data=[...STATE[cat]].filter(d=>!search||d.name.toLowerCase().includes(search));
-  data.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='rated'?b.ratedCount-a.ratedCount:sort==='rating'?b.avgRating-a.avgRating:sort==='rewatches'?b.rewatchCount-a.rewatchCount:sort==='logvq'?b.logVQNorm-a.logVQNorm:sort==='affinity'?b.affinityScore-a.affinityScore:b.score-a.score);
+  const covPct=d=>{ const c=cat==='directors'?getCoverage(d):null; return c?c.pct:-1; };
+  data.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='rated'?b.ratedCount-a.ratedCount:sort==='rating'?b.avgRating-a.avgRating:sort==='rewatches'?b.rewatchCount-a.rewatchCount:sort==='logvq'?b.logVQNorm-a.logVQNorm:sort==='affinity'?b.affinityScore-a.affinityScore:sort==='coverage'?covPct(b)-covPct(a):b.score-a.score);
   const grid=document.getElementById(`grid-${cat}`), empty=document.getElementById(`empty-${cat}`);
   if(!data.length){grid.innerHTML='';empty.style.display='block';}
-  else{empty.style.display='none';grid.innerHTML=data.map(d=>personCardHTML(d,rankMap[d.name])).join('');}
+  else{empty.style.display='none';grid.innerHTML=data.map(d=>personCardHTML(d,rankMap[d.name],cat)).join('');}
 }
 
 // ─── Render Results ───────────────────────────────────────────────────────────
 function renderResults(){
   const un=STATE.userName;
+  _dirByName=null;   // scored directors were just rebuilt — drop the coverage lookup cache
   document.getElementById('nav-title').textContent=(un?un+"'s":'My')+' Mount Rushmore';
-  ['directors','writers','actors'].forEach(cat=>{
+  CATS.forEach(cat=>{
     document.getElementById('cat-'+cat).innerHTML=renderCategoryPanel(cat);
     if(STATE[cat].length) filterCat(cat);
   });
+  renderRecsPanel();
   renderGenreStrip();
   renderConformityStrip();
   // Data quality banners
@@ -882,7 +1391,7 @@ function setGenreFilter(genre){
 
 function switchCat(cat){
   STATE.currentCat=cat;
-  ['directors','writers','actors'].forEach(c=>{
+  TABS.forEach(c=>{
     document.getElementById('cat-'+c).style.display=c===cat?'':'none';
     document.getElementById('tab-btn-'+c).classList.toggle('active',c===cat);
   });
@@ -965,8 +1474,28 @@ function reScoreAndRender(){
   renderResults();
 }
 
+// Coverage-only settings: they change what counts as a feature, not the scoring,
+// so they skip re-scoring and just repaint the bars (which keeps search/sort state).
+function refreshAllCoverage(){
+  document.querySelectorAll('.cov-block').forEach(el=>{
+    el.innerHTML=coverageInnerHTML(el.dataset.person,el.dataset.ac||'#c8a840');
+  });
+  const sort=document.getElementById('sort-directors');
+  if(sort&&sort.value==='coverage') filterCat('directors');   // order depends on the new figures
+  if(_filmogModalName) renderFilmogModal();
+  renderRecsPanel();                                          // candidates come from coverage
+}
+
+function onCountDocs(on){ COUNT_DOCS=!!on; refreshAllCoverage(); }
+
 function onSettingSlider(key, val){
   const v=parseInt(val);
+  if(key==='minRuntime'){
+    MIN_RUNTIME=v;
+    document.getElementById('lbl-minRuntime').textContent=v+' min';
+    refreshAllCoverage();
+    return;
+  }
   document.getElementById('lbl-'+key).textContent=v;
   if(key==='minFilms') MIN_FILMS=v;
   if(key==='topActors') TOP_ACTORS=v;
@@ -1117,6 +1646,7 @@ function switchShareCat(cat){
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
+STATE._filmog=loadFilmogCache();   // exact filmographies fetched in earlier sessions
 updateConfigBadge();
 if(!loadShareFromHash()) showPage('page-upload');
 window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#share=')) loadShareFromHash(); });
@@ -1157,10 +1687,49 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
       <div style="color:#88889a;font-size:13px;line-height:1.8">Your Letterboxd export is processed entirely in your browser. Nothing is sent to any server except the TMDB API for director/writer/actor lookups. Your API key is stored only in your browser's localStorage and never leaves your device.</div>
     </div>
 
+    <div style="margin-bottom:18px">
+      <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Filmography Coverage</div>
+      <div style="color:#88889a;font-size:13px;line-height:1.8">
+        Each director card shows how much of their <b style="color:#c8c0b0">feature filmography</b> you've seen.
+        What counts as a feature is two tests, both adjustable under ⚖ Settings: a <b style="color:#c8c0b0">length</b>
+        test (40 minutes by default, the Academy's threshold) and a <b style="color:#c8c0b0">kind</b> test —
+        documentaries and concert films are excluded by default, since for most directors they're a separate
+        body of work. Turn <b style="color:#c8c0b0">Count documentaries</b> on for someone like Herzog or Morris,
+        where the docs <em>are</em> the filmography.
+        The <b style="color:#c8c0b0">≈</b> figure is measured against the built-in database, which holds their
+        best-known work rather than every title, so it reads high for directors with obscure or early films.
+        <b style="color:#c8c0b0">Click the bar</b> to see exactly which films you're missing, listed by year.
+        Hit <b style="color:#c8c0b0">⟳ Exact filmography</b> there (or on the directors panel, for the top four)
+        to pull the complete credits from TMDB — that needs a free API key, and the result is cached for next time.
+        It's a coverage measure only; it does not affect scoring or ranking.
+      </div>
+    </div>
+
+    <div style="margin-bottom:18px">
+      <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">🍿 Watch Next</div>
+      <div style="color:#88889a;font-size:13px;line-height:1.8">
+        Every film you haven't seen by a director who qualifies, ranked on three axes:
+        <b style="color:#c8c0b0">affinity</b> (how highly you rate them),
+        <b style="color:#c8c0b0">completion</b> (how near you are to finishing them — both how far along you are
+        and how few are left), and <b style="color:#c8c0b0">acclaim</b> (the film's TMDB popularity and rating).
+        The four modes are just different weightings of those same three, so each one still mixes directors you
+        love with filmographies you're close to closing out. Nothing here is scored on films you haven't watched,
+        so the wider your filmography data, the better it gets.
+      </div>
+    </div>
+
     <div>
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Writers &amp; Actors</div>
       <div style="color:#88889a;font-size:13px;line-height:1.8">Writers are credited for Screenplay, Story, and Adaptation roles. Actors are the top <span id="modal-top-actors">5</span> billed cast members per film. Both use the same scoring formula as directors.</div>
     </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════ FILMOGRAPHY / MISSING FILMS MODAL -->
+<div id="filmog-modal" class="modal-bg" onclick="if(event.target===this)closeFilmogModal()">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeFilmogModal()">✕</button>
+    <div id="filmog-modal-body"></div>
   </div>
 </div>
 
