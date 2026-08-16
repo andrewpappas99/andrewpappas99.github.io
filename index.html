@@ -21,21 +21,25 @@ input,select,button{font-family:inherit}
 .mono{font-family:'IBM Plex Mono',monospace;letter-spacing:-0.3px}
 .btn-gold{background:#c8a840;color:#08080f;border:none;border-radius:9px;padding:13px 22px;font-size:15px;font-weight:bold;cursor:pointer;transition:opacity .15s}
 .btn-gold:hover{opacity:.88}
-.btn-ghost{background:transparent;border:1px solid #252535;color:#66667a;border-radius:9px;padding:11px 18px;cursor:pointer;font-size:13px;transition:border-color .15s}
-.btn-ghost:hover{border-color:#3a3a52;color:#88889a}
+.btn-ghost{background:transparent;border:1px solid #252535;color:#a0a0b4;border-radius:9px;padding:11px 18px;cursor:pointer;font-size:13px;transition:border-color .15s}
+.btn-ghost:hover{border-color:#3a3a52;color:#b2b2c4}
 .btn-sm{padding:7px 14px;font-size:12px;border-radius:7px}
 .input-field{background:#111120;border:1px solid #222238;color:#e0d8c8;border-radius:8px;padding:12px 16px;font-size:14px;outline:none;transition:border-color .15s;width:100%}
 .input-field:focus{border-color:#c8a84066}
 .card{background:linear-gradient(150deg,#141420,#0e0e18);border-radius:10px;padding:18px 20px;position:relative;overflow:hidden}
 .progress-bar{background:#0e0e1c;border-radius:100px;height:4px;overflow:hidden}
 .progress-fill{background:linear-gradient(90deg,#6a5010,#c8a840);height:100%;border-radius:100px;transition:width .3s ease}
-.drop-zone{border:2px dashed #252535;border-radius:14px;padding:40px 20px;text-align:center;cursor:pointer;background:#0c0c1a;transition:border-color .2s,background .2s}
+.drop-zone{display:block;border:2px dashed #252535;border-radius:14px;padding:40px 20px;text-align:center;cursor:pointer;background:#0c0c1a;transition:border-color .2s,background .2s}
 .drop-zone:hover,.drop-zone.drag{border-color:#c8a840;background:#c8a8400d}
+/* The file input stays in the tab order — display:none removed it entirely, which
+   left keyboard users with no way to reach the only upload control in the app. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#file-input:focus-visible+.drop-zone{border-color:#c8a840;box-shadow:0 0 0 3px #c8a84033}
 .nav{background:#06060f;border-bottom:1px solid #151525;position:sticky;top:0;z-index:100}
 .nav-inner{display:flex;align-items:center;gap:10px;height:54px;flex-wrap:wrap;padding:0 20px;max-width:980px;margin:0 auto}
-.nav-tab{background:none;border:none;border-bottom:2px solid transparent;color:#55556a;padding:6px 14px;border-radius:0;cursor:pointer;font-size:12px;transition:all .15s;white-space:nowrap;letter-spacing:.3px}
+.nav-tab{background:none;border:none;border-bottom:2px solid transparent;color:#9595aa;padding:6px 14px;border-radius:0;cursor:pointer;font-size:12px;transition:all .15s;white-space:nowrap;letter-spacing:.3px}
 .nav-tab.active{color:#c8a840;border-bottom-color:#c8a840}
-.nav-tab:hover:not(.active){color:#88889a}
+.nav-tab:hover:not(.active){color:#b2b2c4}
 .dir-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
 .also-chip{background:#0d0d1a;border:1px solid #1c1c2c;border-radius:8px;padding:8px 14px;display:inline-flex;gap:10px;align-items:center}
 .section-divider{border:none;border-top:1px solid #151525;margin:36px 0}
@@ -46,7 +50,7 @@ input,select,button{font-family:inherit}
 .ornament-rule::before{content:'';flex:1;height:1px;background:linear-gradient(90deg,transparent,#c8a84033)}
 .ornament-rule::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,#c8a84033,transparent)}
 .slider-group{display:flex;flex-direction:column;gap:5px;min-width:130px}
-.slider-label{color:#77778a;font-size:11px;display:flex;justify-content:space-between}
+.slider-label{color:#a9a9bc;font-size:11px;display:flex;justify-content:space-between}
 .slider-val{color:#c8a840;font-weight:bold}
 .wslider{-webkit-appearance:none;appearance:none;width:100%;height:3px;border-radius:2px;background:#1e1e2e;outline:none;cursor:pointer}
 .wslider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#c8a840;cursor:pointer}
@@ -59,12 +63,15 @@ input,select,button{font-family:inherit}
 .modal-bg{display:none;position:fixed;inset:0;background:#000000cc;z-index:999;align-items:center;justify-content:center;padding:20px}
 .modal-bg.open{display:flex}
 .modal-box{background:#0e0e1c;border:1px solid #252535;border-radius:14px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;padding:28px}
-.modal-close{float:right;background:none;border:none;color:#55556a;font-size:20px;cursor:pointer;line-height:1}
+.modal-close{float:right;background:none;border:none;color:#9595aa;font-size:20px;cursor:pointer;line-height:1}
 /* Genre bar */
 .genre-bar{height:6px;border-radius:3px;background:#c8a840;transition:width .4s ease}
 /* Clickable filmography-coverage bar */
-.cov-click{cursor:pointer;border-radius:5px;margin:-3px -5px;padding:3px 5px;transition:background .15s}
+/* A real <button>: as a div this was unreachable by keyboard, so the whole
+   missing-films drill-down was mouse-only. */
+.cov-click{display:block;width:calc(100% + 10px);background:none;border:none;font:inherit;color:inherit;text-align:left;cursor:pointer;border-radius:5px;margin:-3px -5px;padding:3px 5px;transition:background .15s}
 .cov-click:hover{background:#ffffff0a}
+.cov-click:focus-visible,.nav-tab:focus-visible,.btn-gold:focus-visible,.btn-ghost:focus-visible,.modal-close:focus-visible{outline:2px solid #c8a840;outline-offset:2px}
 /* Mobile */
 @media(max-width:640px){
   .nav-inner{height:auto;padding:8px 12px;gap:6px}
@@ -75,6 +82,10 @@ input,select,button{font-family:inherit}
   .dir-grid{grid-template-columns:1fr}
   .slider-group{min-width:calc(50% - 10px)}
   h1{font-size:clamp(28px,6vw,48px)!important}
+  /* The action row is 426px wide at 375px: without wrapping it pushed the page
+     sideways and put the ✕ reset button off-screen entirely. */
+  .nav-actions{flex-wrap:wrap;flex-shrink:1!important;width:100%;justify-content:flex-start}
+  .nav-actions>span{display:none}
 }
 </style>
 </head>
@@ -83,48 +94,48 @@ input,select,button{font-family:inherit}
 <!-- ══════════════════════════════════ UPLOAD -->
 <div id="page-upload" class="page active">
   <div style="text-align:center;padding:52px 20px 36px;border-bottom:1px solid #181828">
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:4px;color:#2a2a3a;text-transform:uppercase;margin-bottom:18px">Your Cinema &nbsp;◆&nbsp; Letterboxd Analysis</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:4px;color:#777787;text-transform:uppercase;margin-bottom:18px">Your Cinema &nbsp;◆&nbsp; Letterboxd Analysis</div>
     <div style="height:1px;background:linear-gradient(90deg,transparent,#252535,transparent);max-width:320px;margin:0 auto 28px"></div>
     <div class="eyebrow" style="display:inline-block">Crew &amp; Cast</div>
     <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:clamp(32px,7vw,64px);font-weight:900;margin:10px 0 12px;line-height:1.05;color:#f0e8d8">
       Mount Rushmore<br/><em style="color:#c8a840;font-size:.82em">of Cinema</em>
     </h1>
-    <p style="color:#77778a;max-width:440px;margin:0 auto;line-height:1.75;font-size:14px">
+    <p style="color:#a9a9bc;max-width:440px;margin:0 auto;line-height:1.75;font-size:14px">
       Find the four directors, writers, and actors who define your taste.
     </p>
   </div>
   <div style="max-width:660px;margin:0 auto;padding:32px 20px">
     <div style="text-align:center;margin-bottom:28px">
       <a href="https://letterboxd.com/settings/data/" target="_blank" class="btn-gold" style="display:inline-block;text-decoration:none;font-size:15px;padding:14px 28px">Export from Letterboxd →</a>
-      <p style="color:#44445a;font-size:12px;margin-top:10px">Settings → Import &amp; Export → Export Your Data · then unzip and upload below</p>
+      <p style="color:#8c8ca2;font-size:12px;margin-top:10px">Settings → Import &amp; Export → Export Your Data · then unzip and upload below</p>
     </div>
-    <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
-      <div style="font-size:26px;margin-bottom:10px">🎬</div>
+    <input id="file-input" type="file" accept=".csv,.json" multiple class="sr-only" onchange="handleFileInput(this.files)"/>
+    <label id="drop-zone" class="drop-zone" for="file-input">
+      <div style="font-size:26px;margin-bottom:10px" aria-hidden="true">🎬</div>
       <div id="drop-label" style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop files here or click to browse</div>
-      <div style="color:#44445a;font-size:12px">diary.csv · ratings.csv · watched.csv · or a previously saved .json data file</div>
-      <input id="file-input" type="file" accept=".csv,.json" multiple style="display:none" onchange="handleFileInput(this.files)"/>
-    </div>
+      <div style="color:#8c8ca2;font-size:12px">diary.csv · ratings.csv · watched.csv · or a previously saved .json data file</div>
+    </label>
     <!-- Config -->
     <div style="margin-top:18px;background:#0e0e1c;border:1px solid #1a1a2c;border-radius:12px;overflow:hidden">
-      <button onclick="toggleConfig()" style="width:100%;background:none;border:none;color:#66667a;padding:14px 18px;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center;font-size:13px">
+      <button onclick="toggleConfig()" style="width:100%;background:none;border:none;color:#a0a0b4;padding:14px 18px;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center;font-size:13px">
         <span>⚙ API Key Setup <span id="config-status-badge"></span></span>
         <span id="config-chevron">▸</span>
       </button>
       <div id="config-panel" style="display:none;padding:0 18px 18px">
-        <div style="color:#55556a;font-size:12px;line-height:1.65;margin-bottom:14px;padding-top:4px">
+        <div style="color:#9595aa;font-size:12px;line-height:1.65;margin-bottom:14px;padding-top:4px">
           The built-in database covers the top ~10,000 films and works without any key.
           Add a free <b style="color:#c8c0b0">TMDB</b> key to look up obscure or foreign films not in the database.
           Get one at <span style="color:#c8a840">themoviedb.org/settings/api</span>.
         </div>
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <label style="color:#c8c0b0;font-size:13px;font-weight:bold">TMDB API Key <span style="color:#66667a;font-size:11px">(optional)</span></label>
+            <label style="color:#c8c0b0;font-size:13px;font-weight:bold">TMDB API Key <span style="color:#a0a0b4;font-size:11px">(optional)</span></label>
             <span id="tmdb-saved-badge" style="display:none;color:#4a9a4a;font-size:11px">✓ saved</span>
           </div>
           <div style="display:flex;gap:8px">
             <input id="tmdb-key-input" class="input-field" type="password" placeholder="Paste TMDB API key…" style="flex:1"/>
             <button class="btn-ghost btn-sm" onclick="saveKey('tmdb')">Save</button>
-            <button class="btn-ghost btn-sm" onclick="clearKey('tmdb')" style="color:#553333;border-color:#2a1a1a">Clear</button>
+            <button class="btn-ghost btn-sm" onclick="clearKey('tmdb')" style="color:#937171;border-color:#2a1a1a">Clear</button>
           </div>
         </div>
       </div>
@@ -138,13 +149,13 @@ input,select,button{font-family:inherit}
     <div style="max-width:440px;width:100%;animation:fadeUp .3s ease">
       <div class="eyebrow" style="margin-bottom:12px">One quick thing</div>
       <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:28px;margin:0 0 10px;color:#f0e8d8;font-weight:700">What's your name?</h2>
-      <p style="color:#66667a;font-size:14px;line-height:1.7;margin-bottom:28px">We'll personalize the graphic — <em style="color:#88889a">Marty's Mount Rushmore</em>. Hit Enter or leave blank to skip.</p>
+      <p style="color:#a0a0b4;font-size:14px;line-height:1.7;margin-bottom:28px">We'll personalize the graphic — <em style="color:#b2b2c4">Marty's Mount Rushmore</em>. Hit Enter or leave blank to skip.</p>
       <input id="name-input" class="input-field" style="margin-bottom:12px" placeholder="Your first name…" onkeydown="if(event.key==='Enter')startAnalysis()"/>
       <div style="display:flex;gap:10px">
         <button class="btn-gold" style="flex:1" id="analyze-btn" onclick="startAnalysis()">Analyze →</button>
         <button class="btn-ghost" onclick="showPage('page-upload')">Back</button>
       </div>
-      <p id="naming-files" style="color:#2a2a3a;font-size:11px;margin-top:12px;text-align:center"></p>
+      <p id="naming-files" style="color:#777787;font-size:11px;margin-top:12px;text-align:center"></p>
       <div id="lookup-badge" style="margin-top:10px;text-align:center"></div>
     </div>
   </div>
@@ -156,9 +167,9 @@ input,select,button{font-family:inherit}
     <div style="text-align:center;max-width:440px;width:100%">
       <div class="spinner"></div>
       <div id="proc-title" style="color:#c8a840;font-family:'Playfair Display',Georgia,serif;font-size:18px;margin-bottom:12px">Sculpting your mountain…</div>
-      <div id="proc-msg" style="color:#55556a;font-size:13px;line-height:1.6;margin-bottom:28px;min-height:44px"></div>
+      <div id="proc-msg" style="color:#9595aa;font-size:13px;line-height:1.6;margin-bottom:28px;min-height:44px"></div>
       <div class="progress-bar"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
-      <div id="prog-pct" style="color:#2a2a42;font-size:11px;margin-top:10px">0%</div>
+      <div id="prog-pct" style="color:#76768e;font-size:11px;margin-top:10px">0%</div>
       <button class="btn-ghost btn-sm" style="margin-top:22px" onclick="cancelAnalysis()">Cancel</button>
     </div>
   </div>
@@ -170,7 +181,7 @@ input,select,button{font-family:inherit}
     <div style="text-align:center;max-width:440px">
       <div style="font-size:36px;margin-bottom:20px">⚠️</div>
       <h3 style="font-family:'Playfair Display',Georgia,serif;color:#f0e8d8;margin:0 0 14px;font-size:22px">Something went wrong</h3>
-      <p id="err-msg" style="color:#77778a;font-size:14px;line-height:1.75;margin-bottom:30px"></p>
+      <p id="err-msg" style="color:#a9a9bc;font-size:14px;line-height:1.75;margin-bottom:30px"></p>
       <div style="display:flex;gap:10px;justify-content:center">
         <button class="btn-gold" onclick="showPage('page-upload')">Try Again</button>
         <button class="btn-ghost" onclick="showPage('page-upload');toggleConfig(true)">Check API Keys</button>
@@ -185,7 +196,7 @@ input,select,button{font-family:inherit}
     <div class="nav-inner">
       <div style="flex-shrink:0;border-right:1px solid #1e1e2e;padding-right:14px;margin-right:4px">
         <div id="nav-title" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#c8a840">My Mount Rushmore</div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:#2a2a3a;text-transform:uppercase;margin-top:1px">of Cinema</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:#777787;text-transform:uppercase;margin-top:1px">of Cinema</div>
       </div>
       <div style="display:flex;gap:2px">
         <button class="nav-tab active" id="tab-btn-directors" onclick="switchCat('directors')">🎬 Directors</button>
@@ -194,21 +205,21 @@ input,select,button{font-family:inherit}
         <button class="nav-tab" id="tab-btn-recs" onclick="switchCat('recs')">🍿 Watch Next</button>
       </div>
       <div style="flex:1"></div>
-      <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
+      <div class="nav-actions" style="display:flex;gap:6px;flex-shrink:0;align-items:center">
         <button class="btn-gold btn-sm" onclick="shareResults()">🔗 Share</button>
         <button class="btn-ghost btn-sm" onclick="downloadPNG()">↓ PNG</button>
         <button class="btn-ghost btn-sm" onclick="exportCache()">↓ Save Data</button>
         <button class="btn-ghost btn-sm" onclick="openModal()">? How</button>
         <button class="btn-ghost btn-sm" onclick="toggleWeights()">⚖ Settings</button>
         <span style="width:1px;height:20px;background:#1e1e2e;margin:0 6px;flex-shrink:0"></span>
-        <button class="btn-ghost btn-sm" onclick="resetApp()" style="color:#664444;border-color:#2a1a1a" title="Start over">✕</button>
+        <button class="btn-ghost btn-sm" onclick="resetApp()" style="color:#9a7878;border-color:#2a1a1a" title="Start over">✕</button>
       </div>
     </div>
     <!-- Weight sliders panel -->
     <div id="weights-panel" style="display:none;background:#0a0a14;border-top:1px solid #1a1a2a;padding:14px 20px">
       <div style="max-width:980px;margin:0 auto">
         <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
-          <div style="color:#55556a;font-size:11px;padding-top:16px;flex-shrink:0">Scoring weights<br/><span id="weights-total-badge" style="color:#c8a840"></span></div>
+          <div style="color:#9595aa;font-size:11px;padding-top:16px;flex-shrink:0">Scoring weights<br/><span id="weights-total-badge" style="color:#c8a840"></span></div>
           <div style="flex:1;display:flex;gap:20px;flex-wrap:wrap;min-width:0">
             <div class="slider-group">
               <div class="slider-label">Volume &times; Quality <span id="lbl-ratingSum" class="slider-val">65%</span></div>
@@ -240,7 +251,7 @@ input,select,button{font-family:inherit}
             <div class="slider-group" style="min-width:170px">
               <div class="slider-label">Feature length <span id="lbl-minRuntime" class="slider-val">40 min</span></div>
               <input type="range" min="20" max="90" step="5" value="40" id="sl-minRuntime" class="wslider" oninput="onSettingSlider('minRuntime',this.value)"/>
-              <label style="display:flex;align-items:center;gap:6px;color:#77778a;font-size:11px;cursor:pointer;margin-top:7px">
+              <label style="display:flex;align-items:center;gap:6px;color:#a9a9bc;font-size:11px;cursor:pointer;margin-top:7px">
                 <input type="checkbox" id="cb-countDocs" onchange="onCountDocs(this.checked)" style="accent-color:#c8a840;cursor:pointer"/>
                 Count documentaries
               </label>
@@ -255,7 +266,7 @@ input,select,button{font-family:inherit}
   <div id="genre-strip" style="display:none;background:#080810;border-bottom:1px solid #111120;padding:14px 0">
     <div class="wrap">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <span style="color:#44445a;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Top Genres</span>
+        <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Top Genres</span>
         <div id="genre-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
     </div>
@@ -311,7 +322,10 @@ const CAT_LABELS  = { directors:'Directors', writers:'Writers', actors:'Actors' 
 const CAT_ICONS   = { directors:'🎬', writers:'✍️', actors:'🎭' };
 const CATS        = ['directors','writers','actors'];   // scored person categories
 const TABS        = [...CATS,'recs'];                   // + the recommendations panel
-const TMDB_GENRES = {28:'Action',12:'Adventure',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',14:'Fantasy',36:'History',27:'Horror',10402:'Music',9648:'Mystery',10749:'Romance',878:'Sci-Fi',53:'Thriller',10752:'War',37:'Western'};
+const TMDB_GENRES = {28:'Action',12:'Adventure',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',14:'Fantasy',36:'History',27:'Horror',10402:'Music',9648:'Mystery',10749:'Romance',878:'Sci-Fi',53:'Thriller',10752:'War',37:'Western',10770:'TV Movie'};
+const TMDB_BASE = 'https://api.themoviedb.org/3';
+// Same list build-db.js uses; hoisted so it isn't rebuilt on every film lookup
+const WRITING_JOBS = new Set(['Screenplay','Writer','Story','Original Story','Script','Adaptation']);
 
 // ─── Built-in Film Database ───────────────────────────────────────────────────
 // Loaded from film-db.js (generated by build-db.js). Falls back to empty if not present.
@@ -399,28 +413,50 @@ function updateConfigBadge(){
   } else if(hasTMDB){
     el.innerHTML='<span style="color:#4a9a4a;font-size:11px;margin-left:6px">● TMDB ready</span>';
   } else {
-    el.innerHTML='<span style="color:#664444;font-size:11px;margin-left:6px">● No database or key</span>';
+    el.innerHTML='<span style="color:#9a7878;font-size:11px;margin-left:6px">● No database or key</span>';
   }
   if(hasTMDB) document.getElementById('tmdb-saved-badge').style.display='inline';
 }
 
 // ─── CSV Parsing ──────────────────────────────────────────────────────────────
-function parseCSVLine(line){ const cols=[]; let cur='',inQ=false; for(const ch of line){ if(ch==='"')inQ=!inQ; else if(ch===','&&!inQ){cols.push(cur.trim());cur='';} else cur+=ch; } cols.push(cur.trim()); return cols; }
+// Tokenize the whole file rather than line by line: a quoted field may legally
+// contain newlines (Letterboxd's reviews.csv is full of them), and splitting on
+// newlines first tore those rows in half. Also handles RFC 4180 escaped quotes ("").
+function parseCSVRows(text){
+  const rows=[]; let row=[], cur='', inQ=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){
+      if(ch!=='"'){ cur+=ch; }
+      else if(text[i+1]==='"'){ cur+='"'; i++; }   // "" is a literal quote
+      else inQ=false;
+    }
+    else if(ch==='"') inQ=true;
+    else if(ch===','){ row.push(cur.trim()); cur=''; }
+    else if(ch==='\n'){ row.push(cur.trim()); rows.push(row); row=[]; cur=''; }
+    else if(ch!=='\r') cur+=ch;
+  }
+  row.push(cur.trim());
+  if(row.length>1||row[0]) rows.push(row);
+  return rows;
+}
 
 function parseLetterboxdCSV(text){
-  const lines=text.trim().split(/\r?\n/).filter(Boolean);
-  if(!lines.length) throw new Error('Empty file.');
-  const header=parseCSVLine(lines[0]).map(h=>h.replace(/"/g,'').toLowerCase().trim());
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(!rows.length) throw new Error('Empty file.');
+  const header=rows[0].map(h=>h.toLowerCase().trim());
   const gi=k=>header.findIndex(h=>h===k);
   const nameI=gi('name'),yearI=gi('year'),ratingI=gi('rating'),rewatchI=gi('rewatch');
-  if(nameI<0) throw new Error("No 'Name' column found. Upload diary.csv, ratings.csv, or watched.csv.");
-  // watched.csv has no rating column — films count toward volume but are unrated
-  const isWatched=ratingI<0&&header.includes('letterboxd uri');
+  // Name and Year are both required — an unchecked Year used to drop every row and
+  // surface as the far less helpful "No films found."
+  const missing=[nameI<0?"'Name'":'',yearI<0?"'Year'":''].filter(Boolean).join(' and ');
+  if(missing) throw new Error(`No ${missing} column found. Upload diary.csv, ratings.csv, or watched.csv from your Letterboxd export.`);
   const films=[];
-  for(let i=1;i<lines.length;i++){
-    const c=parseCSVLine(lines[i]);
-    const name=(c[nameI]||'').replace(/"/g,'').trim(), year=parseInt(c[yearI]);
-    const rating=isWatched?0:ratingI>=0?parseFloat(c[ratingI])||0:0;
+  for(let i=1;i<rows.length;i++){
+    const c=rows[i];
+    // watched.csv has no rating column — those films count toward volume but are unrated
+    const name=(c[nameI]||'').trim(), year=parseInt(c[yearI],10);
+    const rating=ratingI>=0?parseFloat(c[ratingI])||0:0;
     const rewatch=rewatchI>=0&&(c[rewatchI]||'').toLowerCase().trim()==='yes';
     if(name&&year) films.push({name,year,rating,rewatch});
   }
@@ -436,17 +472,18 @@ function consolidateFilms(rawFilms){
 // ─── TMDB Lookup ─────────────────────────────────────────────────────────────
 // One call per film: search → credits → returns {director, writers, actors}
 async function lookupOneTMDB(film, apiKey, signal){
-  const base='https://api.themoviedb.org/3';
+  const base=TMDB_BASE;
+  const key=encodeURIComponent(apiKey);   // a stray & in the key would rewrite the query
   const q=encodeURIComponent(film.name);
   // Search with year
-  let res=await fetch(`${base}/search/movie?api_key=${apiKey}&query=${q}&year=${film.year}&language=en-US`,{signal});
+  let res=await fetch(`${base}/search/movie?api_key=${key}&query=${q}&year=${film.year}&language=en-US`,{signal});
   if(res.status===401) throw new Error('TMDB_AUTH');
   if(!res.ok) return null;
   let data=await res.json();
   let movie=(data.results||[])[0];
   // Retry without year if no match
   if(!movie){
-    res=await fetch(`${base}/search/movie?api_key=${apiKey}&query=${q}&language=en-US`,{signal});
+    res=await fetch(`${base}/search/movie?api_key=${key}&query=${q}&language=en-US`,{signal});
     if(!res.ok) return null;
     data=await res.json();
     const results=data.results||[];
@@ -454,13 +491,12 @@ async function lookupOneTMDB(film, apiKey, signal){
     if(!movie) return null;
   }
   // Credits — single call returns director + writers + cast
-  res=await fetch(`${base}/movie/${movie.id}/credits?api_key=${apiKey}`,{signal});
+  res=await fetch(`${base}/movie/${movie.id}/credits?api_key=${key}`,{signal});
   if(!res.ok) return null;
   const cred=await res.json();
   const crew=cred.crew||[], cast=cred.cast||[];
   const director=(crew.find(c=>c.job==='Director')||{}).name||null;
-  const WRITING_JOBS=['Screenplay','Writer','Story','Original Story','Script','Adaptation'];
-  const writers=[...new Set(crew.filter(c=>WRITING_JOBS.includes(c.job)).map(c=>c.name))].slice(0,3);
+  const writers=[...new Set(crew.filter(c=>WRITING_JOBS.has(c.job)).map(c=>c.name))].slice(0,3);
   const actors=cast.slice(0,10).map(c=>c.name); // store top 10, slice at scoring time per TOP_ACTORS setting
   const genres=(movie.genre_ids||[]).map(id=>TMDB_GENRES[id]).filter(Boolean);
   const voteAvg=movie.vote_average?movie.vote_average/2:null; // TMDB 0-10 → 0-5 scale
@@ -537,13 +573,15 @@ function computeScores(byPerson, globalMean){
   const gMean = globalMean ?? 3.5;
   const qualified=Object.entries(byPerson).filter(([,f])=>f.filter(x=>x.rating>0).length>=MIN_FILMS);
   if(!qualified.length) return [];
-  const maxRw=Math.max(...qualified.map(([,f])=>f.reduce((s,x)=>s+x.rewatchCount,0)),1);
+  // reduce rather than Math.max(...spread): the actors map on a large library can
+  // hold thousands of qualifiers, and a spread that wide risks the argument limit.
+  const maxRw=qualified.reduce((m,[,f])=>Math.max(m,f.reduce((s,x)=>s+x.rewatchCount,0)),1);
   // Pre-compute logVolQuality for each to find the max for normalization
-  const maxLogVQ=Math.max(...qualified.map(([,f])=>{
+  const maxLogVQ=qualified.reduce((m,[,f])=>{
     const r=f.filter(x=>x.rating>0);
     const avg=r.length?r.reduce((s,x)=>s+x.rating,0)/r.length:0;
-    return Math.log2(f.length+1)*avg;
-  }),1);
+    return Math.max(m,Math.log2(f.length+1)*avg);
+  },1);
   return qualified.map(([name,films])=>{
     const rated=films.filter(f=>f.rating>0);
     const filmCount=films.length, rewatchCount=films.reduce((s,f)=>s+f.rewatchCount,0);
@@ -571,8 +609,10 @@ function buildPersonMaps(films, filmData){
   for(const f of films){
     const d=filmData[f.name+'||'+f.year];
     if(!d) continue;
-    if(d.voteAvg!=null) f.voteAvg=d.voteAvg;
-    const addTo=(map,person)=>{ if(!map[person])map[person]=[]; map[person].push(f); };
+    // Attach the community rating to a copy. Mutating the caller's film objects made
+    // the call order load-bearing and leaked voteAvg into the exported films array.
+    const fe=d.voteAvg!=null?Object.assign({},f,{voteAvg:d.voteAvg}):f;
+    const addTo=(map,person)=>{ if(!map[person])map[person]=[]; map[person].push(fe); };
     if(d.director) addTo(byDir,d.director);
     (d.writers||[]).forEach(w=>addTo(byWriter,w));
     (d.actors||[]).slice(0,TOP_ACTORS).forEach(a=>addTo(byActor,a));
@@ -623,13 +663,15 @@ function handleFileInput(files){
           const{byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(d.films,d.filmData);
           STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
           STATE._globalMean=globalMean;
+          STATE._conformity=computeConformity(d.films,d.filmData);
           if(genres.length) STATE.genres=genres;
           // Re-score with current weights/settings
           STATE.directors=computeScores(byDir,globalMean);
           STATE.writers=computeScores(byWriter,globalMean);
           STATE.actors=computeScores(byActor,globalMean);
         } else {
-          // Version 1/2: no raw data, rebuild maps from scored arrays only
+          // Version 1/2: no raw data, so conformity can't be measured
+          STATE._conformity=null;
           STATE.directors=d.directors||[];
           STATE.writers=d.writers||[];
           STATE.actors=d.actors||[];
@@ -644,7 +686,7 @@ function handleFileInput(files){
   document.getElementById('drop-label').textContent='✓ '+names;
   document.getElementById('naming-files').textContent='Files: '+names;
   const hasTMDB=!!getKey('tmdb');
-  document.getElementById('lookup-badge').innerHTML=hasTMDB?'<span style="color:#4a9a4a;font-size:12px">Will use TMDB (free)</span>':'<span style="color:#c05050;font-size:12px">⚠ No TMDB key — open ⚙ Setup to add one</span>';
+  document.getElementById('lookup-badge').innerHTML=hasTMDB?'<span style="color:#4a9a4a;font-size:12px">Will use TMDB (free)</span>':'<span style="color:#c65656;font-size:12px">⚠ No TMDB key — open ⚙ Setup to add one</span>';
   document.getElementById('name-input').value=''; document.getElementById('analyze-btn').textContent='Analyze →';
   showPage('page-naming');
 }
@@ -687,7 +729,8 @@ async function startAnalysis(){
     STATE._filmData=filmData; STATE._films=films;
     STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
     STATE._globalMean=globalMean;
-    STATE.genres=genres;
+    STATE._conformity=computeConformity(films,filmData);   // else the strip only ever
+    STATE.genres=genres;                                   // appeared after a slider drag
     STATE.directors=computeScores(byDir,globalMean);
     STATE.writers=computeScores(byWriter,globalMean);
     STATE.actors=computeScores(byActor,globalMean);
@@ -705,7 +748,7 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
@@ -759,16 +802,16 @@ function svgCards(top4,MTN_H,CARD_H){
     if(ci>0)s+=`<line x1="${cx0}" y1="${cy0+10}" x2="${cx0}" y2="${cy0+CARD_H-10}" stroke="#1e1e30" stroke-width="1"/>`;
     s+=`<rect x="${cx0+cp}" y="${cy0+cp}" width="28" height="28" rx="6" fill="${cc}18"/><text x="${cx0+cp+14}" y="${cy0+cp+19}" text-anchor="middle" fill="${cc}" font-size="13" font-family="Georgia,serif" font-weight="bold">${ci+1}</text>`;
     const dl=splitName(cd.name);for(let li=0;li<dl.length;li++)s+=`<text x="${cx0+cp+36}" y="${cy0+cp+15+li*15}" fill="#f0e8d8" font-size="11" font-family="Georgia,serif" font-weight="bold">${esc(dl[li])}</text>`;
-    s+=`<text x="${cx0+cp}" y="${cy0+82}" fill="#55556a" font-size="10" font-family="Georgia,serif">${cd.filmCount} film${cd.filmCount!==1?'s':''}${cd.rewatchCount>0?' · '+cd.rewatchCount+' rw':''}</text>`;
-    s+=`<text x="${cx0+cp}" y="${cy0+102}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">AVG RATING</text>`;
+    s+=`<text x="${cx0+cp}" y="${cy0+82}" fill="#9595aa" font-size="10" font-family="Georgia,serif">${cd.filmCount} film${cd.filmCount!==1?'s':''}${cd.rewatchCount>0?' · '+cd.rewatchCount+' rw':''}</text>`;
+    s+=`<text x="${cx0+cp}" y="${cy0+102}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">AVG RATING</text>`;
     for(let pi=0;pi<10;pi++)s+=`<rect x="${cx0+cp+pi*13}" y="${cy0+107}" width="10" height="3" rx="1.5" fill="${(pi/10)*5<cd.avgRating?cc:'#1e1e2e'}"/>`;
-    s+=`<text x="${cx0+cp+135}" y="${cy0+111}" fill="#777" font-size="9" font-family="Georgia,serif">${cd.avgRating.toFixed(2)}</text>`;
-    s+=`<text x="${cx0+cp}" y="${cy0+128}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">TOP FILMS</text>`;
+    s+=`<text x="${cx0+cp+135}" y="${cy0+111}" fill="#a6a6a6" font-size="9" font-family="Georgia,serif">${cd.avgRating.toFixed(2)}</text>`;
+    s+=`<text x="${cx0+cp}" y="${cy0+128}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">TOP FILMS</text>`;
     for(let ti=0;ti<10;ti++)s+=`<rect x="${cx0+cp+ti*13}" y="${cy0+133}" width="10" height="3" rx="1.5" fill="${(ti/10)*5<cd.top3Avg?cc:'#1e1e2e'}"/>`;
-    s+=`<text x="${cx0+cp+135}" y="${cy0+137}" fill="#777" font-size="9" font-family="Georgia,serif">${cd.top3Avg.toFixed(2)}</text>`;
-    s+=`<text x="${cx0+cp}" y="${cy0+156}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">BEST FILMS</text>`;
+    s+=`<text x="${cx0+cp+135}" y="${cy0+137}" fill="#a6a6a6" font-size="9" font-family="Georgia,serif">${cd.top3Avg.toFixed(2)}</text>`;
+    s+=`<text x="${cx0+cp}" y="${cy0+156}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">BEST FILMS</text>`;
     for(let fi=0;fi<cd.topFilms.length;fi++){const tf=cd.topFilms[fi],fy=cy0+168+fi*20,tr=tf.name.length>22?tf.name.slice(0,21)+'…':tf.name,fs='★'.repeat(Math.floor(tf.rating))+(tf.rating%1>=0.5?'½':'');s+=`<text x="${cx0+cp}" y="${fy}" fill="#c8c0ae" font-size="10" font-family="Georgia,serif">${esc(tr)}</text><text x="${cx0+colW-cp}" y="${fy}" text-anchor="end" fill="${cc}" font-size="10" font-family="Georgia,serif">${fs}</text>`;}
-    s+=`<line x1="${cx0+cp}" y1="${cy0+CARD_H-42}" x2="${cx0+colW-cp}" y2="${cy0+CARD_H-42}" stroke="${cc}22" stroke-width="1"/><text x="${cx0+cp}" y="${cy0+CARD_H-23}" fill="#44445a" font-size="8" font-family="Georgia,serif" letter-spacing="2">SCORE</text><text x="${cx0+colW-cp}" y="${cy0+CARD_H-18}" text-anchor="end" fill="${cc}" font-size="22" font-family="Georgia,serif" font-weight="bold">${(cd.score*100).toFixed(1)}</text>`;
+    s+=`<line x1="${cx0+cp}" y1="${cy0+CARD_H-42}" x2="${cx0+colW-cp}" y2="${cy0+CARD_H-42}" stroke="${cc}22" stroke-width="1"/><text x="${cx0+cp}" y="${cy0+CARD_H-23}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="2">SCORE</text><text x="${cx0+colW-cp}" y="${cy0+CARD_H-18}" text-anchor="end" fill="${cc}" font-size="22" font-family="Georgia,serif" font-weight="bold">${(cd.score*100).toFixed(1)}</text>`;
   }
   return s;
 }
@@ -801,7 +844,14 @@ function downloadPNG(){
   img.src=url;
 }
 
-function triggerDownload(filename,mime,data){const a=document.createElement('a');a.download=filename;a.href='data:'+mime+';charset=utf-8,'+encodeURIComponent(data);a.click();}
+// Blob rather than a data: URI. encodeURIComponent more than doubled the payload
+// (0.53 MB of export JSON became a 1.15 MB URI) and a large library would have run
+// into browser URI length limits.
+function triggerDownload(filename,mime,data){
+  const url=URL.createObjectURL(new Blob([data],{type:mime+';charset=utf-8'}));
+  const a=document.createElement('a'); a.download=filename; a.href=url; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),0);
+}
 
 // ─── Filmography Coverage ─────────────────────────────────────────────────────
 // "What share of this director's feature filmography have you seen?"
@@ -939,8 +989,25 @@ function getCoverage(d){
   return val;
 }
 
+// A logged film carries no runtime or genres of its own, so pull them from the
+// lookup data. Without this the seen side skipped isFeature altogether: a
+// documentary you'd watched counted as a seen feature even while the very same
+// film was being excluded from the filmography, inflating both halves of the
+// fraction. rt of 0 means unknown, which isFeature deliberately keeps.
+function seenEntry(f){
+  const d=STATE._filmData?STATE._filmData[f.name+'||'+f.year]:null;
+  const g=d&&d.genres?d.genres.join(','):'';
+  return {t:normTitle(f.name),y:f.year,title:f.name,src:f,g,
+          rt:d&&Number.isFinite(d.runtime)?d.runtime:0,
+          doc:g.split(',').indexOf('Documentary')>=0};
+}
+
 function computeCoverage(d){
-  const seen=(d.films||[]).map(f=>({t:normTitle(f.name),y:f.year,title:f.name}));
+  const allSeen=(d.films||[]).map(seenEntry);
+  const seen=allSeen.filter(isFeature);
+  // seenList is what the fraction actually counted, so the modal can list exactly
+  // those rather than every logged title
+  const extra={seenList:seen.map(e=>e.src),seenExcluded:allSeen.length-seen.length};
   const rec=STATE._filmog&&STATE._filmog[d.name];
   if(rec){
     const all=rec.f.map(a=>{
@@ -949,19 +1016,22 @@ function computeCoverage(d){
       return {t:normTitle(title),y:a[1],title,rt:a[2]||0,va:a[3]||null,g,rank:null,
               doc:g.split(',').indexOf('Documentary')>=0};
     });
-    const cov=coverageFrom(all.filter(isFeature),seen);
-    return Object.assign(cov,{source:'tmdb',truncated:!!rec.tr,excluded:all.length-all.filter(isFeature).length});
+    const kept=all.filter(isFeature);
+    return Object.assign(coverageFrom(kept,seen),extra,
+      {source:'tmdb',truncated:!!rec.tr,excluded:all.length-kept.length});
   }
   const filmog=directorIndex()[d.name];
   if(!filmog||!filmog.length) return null;
   const kept=filmog.filter(isFeature);
-  return Object.assign(coverageFrom(kept,seen),{source:'db',truncated:false,excluded:filmog.length-kept.length});
+  return Object.assign(coverageFrom(kept,seen),extra,
+    {source:'db',truncated:false,excluded:filmog.length-kept.length});
 }
 
 // ─── Exact filmography via TMDB ───────────────────────────────────────────────
-async function fetchDirectorFilmography(name, apiKey){
-  const base='https://api.themoviedb.org/3';
-  let res=await fetch(`${base}/search/person?api_key=${apiKey}&query=${encodeURIComponent(name)}&language=en-US`);
+async function fetchDirectorFilmography(name, apiKey, signal){
+  const base=TMDB_BASE;
+  const key=encodeURIComponent(apiKey);
+  let res=await fetch(`${base}/search/person?api_key=${key}&query=${encodeURIComponent(name)}&language=en-US`,{signal});
   if(res.status===401) throw new Error('TMDB_AUTH');
   if(!res.ok) return null;
   const results=(await res.json()).results||[];
@@ -971,7 +1041,7 @@ async function fetchDirectorFilmography(name, apiKey){
   const person=pool.find(p=>p.known_for_department==='Directing')||pool[0];
   if(!person) return null;
 
-  res=await fetch(`${base}/person/${person.id}/movie_credits?api_key=${apiKey}&language=en-US`);
+  res=await fetch(`${base}/person/${person.id}/movie_credits?api_key=${key}&language=en-US`,{signal});
   if(res.status===401) throw new Error('TMDB_AUTH');
   if(!res.ok) return null;
   const crew=(await res.json()).crew||[];
@@ -995,9 +1065,10 @@ async function fetchDirectorFilmography(name, apiKey){
   const capped=credits.slice(0,FILMOG_MAX_CREDITS);
   const films=[];
   for(let i=0;i<capped.length;i+=TMDB_CONCURRENCY){
+    if(signal&&signal.aborted) return null;   // stop between batches on reset/cancel
     await Promise.all(capped.slice(i,i+TMDB_CONCURRENCY).map(async c=>{
       try{
-        const r=await fetch(`${base}/movie/${c.id}?api_key=${apiKey}&language=en-US`);
+        const r=await fetch(`${base}/movie/${c.id}?api_key=${key}&language=en-US`,{signal});
         if(!r.ok) return;
         const m=await r.json();
         // Keep every credit and tag it — MIN_RUNTIME and COUNT_DOCS are applied
@@ -1009,10 +1080,11 @@ async function fetchDirectorFilmography(name, apiKey){
           va:m.vote_average?m.vote_average/2:null,   // TMDB 0-10 -> the app's 0-5
           g
         });
-      }catch(e){ console.warn('Detail lookup failed for',c.title,e); }
+      }catch(e){ if(e.name!=='AbortError') console.warn('Detail lookup failed for',c.title,e); }
     }));
     if(i+TMDB_CONCURRENCY<capped.length) await sleep(120);
   }
+  if(signal&&signal.aborted) return null;
   return {personId:person.id, films, truncated:credits.length>capped.length};
 }
 
@@ -1061,15 +1133,20 @@ async function refineCoverage(name, quiet){
   _refiningNames.add(name); updateCoverageBlocks(name);
   let ok=false;
   try{
-    const r=await fetchDirectorFilmography(name,key);
+    const r=await fetchDirectorFilmography(name,key,STATE.abortController&&STATE.abortController.signal);
     if(r&&r.films.length){
       const rec={at:Date.now(),f:r.films.map(f=>[f.title,f.y,f.rt,f.va,f.g]),tr:r.truncated};
       STATE._filmog[name]=rec;
-      cache[name]=rec; saveFilmogCache(cache);
+      // Re-read rather than persisting the snapshot taken before the await — a
+      // concurrent refine may have added its own entry in the meantime.
+      const fresh=loadFilmogCache(); fresh[name]=rec; saveFilmogCache(fresh);
       _covCache=null;   // this director's figures just changed source
       ok=true;
-    } else if(!quiet){ showToast('No TMDB filmography found for '+name); }
+    } else if(!quiet&&!(STATE.abortController&&STATE.abortController.signal.aborted)){
+      showToast('No TMDB filmography found for '+name);
+    }
   }catch(e){
+    if(e.name==='AbortError') return false;
     console.warn('Filmography lookup failed for',name,e);
     if(!quiet) showToast(e.message==='TMDB_AUTH'?'Invalid TMDB API key — check ⚙ Setup':'Filmography lookup failed');
   }finally{
@@ -1096,8 +1173,8 @@ function dirByName(name){
 
 function coverageInnerHTML(name,ac){
   const row=(right,pct)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;gap:8px">
-      <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Filmography</span>
-      <span style="color:#66667a;font-size:9px;white-space:nowrap">${right}</span>
+      <span style="color:#8c8ca2;font-size:8px;letter-spacing:2px;text-transform:uppercase">Filmography</span>
+      <span style="color:#a0a0b4;font-size:9px;white-space:nowrap">${right}</span>
     </div>
     <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
       <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px;transition:width .3s ease"></div>
@@ -1112,61 +1189,67 @@ function coverageInnerHTML(name,ac){
     ? `${cov.seen} of ${cov.total}${cov.truncated?'+':''} films ${name} directed, per TMDB, counting ${MIN_RUNTIME}+ minute ${COUNT_DOCS?'films including documentaries':'narrative films'}.`
     : `Estimated against the built-in database, which lists their best-known work rather than every title.`)
     +` Click to see the ${cov.missing.length} you haven't seen.`;
-  return `<div class="cov-click" title="${esc(tip)}" onclick="openFilmogModal(${esc(JSON.stringify(name))})">${
-    row(`${exact?'':'≈ '}${cov.seen} / ${cov.total}${cov.truncated?'+':''} · ${cov.pct}%<span style="color:${ac};margin-left:5px">›</span>`,cov.pct)
-  }</div>`;
+  return `<button type="button" class="cov-click" title="${esc(tip)}" aria-label="${esc(name+' filmography: '+cov.seen+' of '+cov.total+' features seen. Show the '+cov.missing.length+" you haven't seen.")}" onclick="openFilmogModal(${esc(JSON.stringify(name))})">${
+    row(`${exact?'':'≈ '}${cov.seen} / ${cov.total}${cov.truncated?'+':''} · ${cov.pct}%<span style="color:${ac};margin-left:5px" aria-hidden="true">›</span>`,cov.pct)
+  }</button>`;
 }
 
 // ─── Missing-films modal ──────────────────────────────────────────────────────
 let _filmogModalName=null;
-function openFilmogModal(name){ _filmogModalName=name; renderFilmogModal(); document.getElementById('filmog-modal').classList.add('open'); }
-function closeFilmogModal(){ _filmogModalName=null; document.getElementById('filmog-modal').classList.remove('open'); }
+function openFilmogModal(name){ _filmogModalName=name; renderFilmogModal(); openModalEl('filmog-modal'); }
+function closeFilmogModal(){ _filmogModalName=null; closeModalEl('filmog-modal'); }
 
 function renderFilmogModal(){
   const name=_filmogModalName, body=document.getElementById('filmog-modal-body');
   if(!name||!body) return;
   const d=dirByName(name), cov=d?getCoverage(d):null;
-  if(!cov){ body.innerHTML=`<div style="color:#66667a;font-size:13px">No filmography data for ${esc(name)}.</div>`; return; }
+  if(!cov){ body.innerHTML=`<div style="color:#a0a0b4;font-size:13px">No filmography data for ${esc(name)}.</div>`; return; }
 
   const exact=cov.source==='tmdb', hasKey=!!getKey('tmdb'), loading=_refiningNames.has(name);
   const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
   const row=(year,title,right)=>`<div style="display:flex;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid #14141f">
-      <span class="mono" style="color:#3a3a52;font-size:11px;flex-shrink:0;width:36px">${Number.isFinite(year)?year:'—'}</span>
+      <span class="mono" style="color:#83839b;font-size:11px;flex-shrink:0;width:36px">${Number.isFinite(year)?year:'—'}</span>
       <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(title)}</span>${right||''}</div>`;
 
   const missing=[...cov.missing].sort((a,b)=>a.y-b.y);
-  const seenFilms=[...(d.films||[])].sort((a,b)=>a.year-b.year);
+  // seenList is the filtered set the percentage was actually computed from, so the
+  // two sections below always add up to the fraction in the header
+  const seenFilms=[...(cov.seenList||d.films||[])].sort((a,b)=>a.year-b.year);
   const source=exact
     ? `<span style="color:#4a9a4a">✓ Exact — released films they directed, from TMDB${cov.truncated?`, capped at the ${FILMOG_MAX_CREDITS} best-known credits`:''}.</span>`
     : `<span style="color:#998870">≈ Estimated from the built-in database of ${Object.keys(FILM_DB).length.toLocaleString()} popular films. It holds their best-known work, so the real filmography is usually larger and this list is incomplete.</span>`;
-  const rule=`<div style="color:#55556a;font-size:11px;line-height:1.65;margin-top:5px">
+  const n=(c,w)=>`${c} ${w}${c!==1?'s':''}`;
+  const dropped=[cov.excluded?n(cov.excluded,'credit'):'',
+                 cov.seenExcluded?n(cov.seenExcluded,'film')+" you've logged":'']
+                .filter(Boolean).join(' and ');
+  const rule=`<div style="color:#9595aa;font-size:11px;line-height:1.65;margin-top:5px">
       Counting ${MIN_RUNTIME}+ minute ${COUNT_DOCS?'films including documentaries':'narrative films — documentaries and concert films excluded'}.
-      ${cov.excluded?`<span style="color:#44445a">${cov.excluded} credit${cov.excluded!==1?'s':''} filtered out.</span>`:''}
-      <span style="color:#44445a">Change this under ⚖ Settings.</span>
+      ${dropped?`<span style="color:#8c8ca2">${dropped} filtered out.</span>`:''}
+      <span style="color:#8c8ca2">Change this under ⚖ Settings.</span>
     </div>`;
 
   body.innerHTML=`
     <div class="eyebrow" style="margin-bottom:10px">Filmography</div>
     <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:8px">${esc(name)}</h2>
     <div style="color:#c8a840;margin-bottom:10px"><span class="mono" style="font-size:22px;font-weight:bold">${cov.pct}%</span>
-      <span style="color:#77778a;font-size:13px;margin-left:6px">${cov.seen} of ${cov.total}${cov.truncated?'+':''} feature${cov.total!==1?'s':''} seen</span></div>
+      <span style="color:#a9a9bc;font-size:13px;margin-left:6px">${cov.seen} of ${cov.total}${cov.truncated?'+':''} feature${cov.total!==1?'s':''} seen</span></div>
     <div class="progress-bar" style="margin-bottom:12px"><div class="progress-fill" style="width:${cov.pct}%"></div></div>
     <div style="font-size:11px;line-height:1.65;margin-bottom:16px">${source}${rule}</div>
     ${exact?'':`<div style="margin-bottom:22px">
       ${loading
         ? `<button class="btn-ghost btn-sm" disabled style="opacity:.55">Fetching from TMDB…</button>`
         : `<button class="btn-gold btn-sm" onclick="refineCoverage(${esc(JSON.stringify(name))})">⟳ Get exact filmography</button>`}
-      ${hasKey?'':`<div style="color:#44445a;font-size:11px;margin-top:7px">Needs a free TMDB API key — add one under ⚙ API Key Setup on the upload screen.</div>`}
+      ${hasKey?'':`<div style="color:#8c8ca2;font-size:11px;margin-top:7px">Needs a free TMDB API key — add one under ⚙ API Key Setup on the upload screen.</div>`}
     </div>`}
     <div style="margin-bottom:22px">
-      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Not seen <span style="color:#44445a">(${missing.length})</span></div>
+      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Not seen <span style="color:#8c8ca2">(${missing.length})</span></div>
       ${missing.length?missing.map(f=>row(f.y,f.title,'')).join(''):`<div style="color:#4a9a4a;font-size:13px">You've seen every film listed here.</div>`}
     </div>
     <div>
-      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Seen <span style="color:#44445a">(${seenFilms.length})</span></div>
+      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Seen <span style="color:#8c8ca2">(${seenFilms.length})</span></div>
       ${seenFilms.map(f=>row(f.year,f.name,f.rating>0
         ? `<span style="color:#c8a840;font-size:11px;flex-shrink:0">${stars(f.rating)}</span>`
-        : `<span style="color:#33334a;font-size:11px;flex-shrink:0">watched</span>`)).join('')}
+        : `<span style="color:#7d7d94;font-size:11px;flex-shrink:0">watched</span>`)).join('')}
     </div>`;
 }
 
@@ -1176,11 +1259,11 @@ function updateCoverageBlocks(name){
     el.innerHTML=coverageInnerHTML(name,el.dataset.ac||'#c8a840');
   });
   if(_filmogModalName===name) renderFilmogModal();   // keep an open modal in step
-  renderRecsPanel();                                 // a fuller filmography changes the pool
+  scheduleRecsRender();                              // a fuller filmography changes the pool
 }
 
 // ─── Person Card HTML ─────────────────────────────────────────────────────────
-function pipsHTML(val,col){let h='<div style="display:flex;gap:2px;align-items:center">';for(let i=0;i<10;i++)h+=`<div style="width:11px;height:3px;border-radius:2px;background:${(i/10)*5<val?col:'#1e1e2e'}"></div>`;h+=`<span style="color:#888;font-size:11px;margin-left:5px">${val?val.toFixed(2):'—'}</span></div>`;return h;}
+function pipsHTML(val,col){let h='<div style="display:flex;gap:2px;align-items:center">';for(let i=0;i<10;i++)h+=`<div style="width:11px;height:3px;border-radius:2px;background:${(i/10)*5<val?col:'#1e1e2e'}"></div>`;h+=`<span style="color:#b0b0b0;font-size:11px;margin-left:5px">${val?val.toFixed(2):'—'}</span></div>`;return h;}
 
 function personCardHTML(d,rank,cat){
   const ac=rank<=4?RANK_COLORS[rank-1]:'#557799';
@@ -1189,7 +1272,7 @@ function personCardHTML(d,rank,cat){
   const displayFilms=[...d.topFilms,...watchedUnrated].slice(0,3);
   let topFilms='';
   for(const f of displayFilms){
-    const label=f.rating>0?`<span style="color:${ac};font-size:10px;margin-left:8px;flex-shrink:0">${stars(f.rating)}</span>`:`<span style="color:#33334a;font-size:10px;margin-left:8px;flex-shrink:0">watched</span>`;
+    const label=f.rating>0?`<span style="color:${ac};font-size:10px;margin-left:8px;flex-shrink:0">${stars(f.rating)}</span>`:`<span style="color:#7d7d94;font-size:10px;margin-left:8px;flex-shrink:0">watched</span>`;
     topFilms+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><span style="color:#c8c0ae;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(f.name)}</span>${label}</div>`;
   }
   return `<div class="card" style="border:1px solid ${ac}28">
@@ -1200,17 +1283,17 @@ function personCardHTML(d,rank,cat){
         <div style="font-family:'Playfair Display',Georgia,serif;font-style:italic;font-size:26px;line-height:1;color:${ac};margin-top:1px">${rank}</div>
       </div>
       <div style="min-width:0;flex:1"><div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(d.name)}</div>
-        <div style="color:#66667a;font-size:11px;margin-top:2px"><span class="mono">${d.ratedCount}</span> rated${d.filmCount>d.ratedCount?' · <span class="mono">'+(d.filmCount-d.ratedCount)+'</span> watched':''}${d.rewatchCount>0?' · <span class="mono">'+d.rewatchCount+'</span> rewatch'+(d.rewatchCount!==1?'es':''):''}</div></div>
+        <div style="color:#a0a0b4;font-size:11px;margin-top:2px"><span class="mono">${d.ratedCount}</span> rated${d.filmCount>d.ratedCount?' · <span class="mono">'+(d.filmCount-d.ratedCount)+'</span> watched':''}${d.rewatchCount>0?' · <span class="mono">'+d.rewatchCount+'</span> rewatch'+(d.rewatchCount!==1?'es':''):''}</div></div>
       <div style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</div>
     </div>
     <div style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px">
       <div>
-        <div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
+        <div style="color:#8c8ca2;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
       </div>
       <div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-          <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Volume × Quality</span>
-          <span style="color:#66667a;font-size:9px">${d.ratedCount} rated · ★${d.avgRating.toFixed(2)}</span>
+          <span style="color:#8c8ca2;font-size:8px;letter-spacing:2px;text-transform:uppercase">Volume × Quality</span>
+          <span style="color:#a0a0b4;font-size:9px">${d.ratedCount} rated · ★${d.avgRating.toFixed(2)}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
           <div style="height:100%;width:${Math.round((d.logVQNorm||0)*100)}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px"></div>
@@ -1218,8 +1301,8 @@ function personCardHTML(d,rank,cat){
       </div>
       <div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-          <span style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase">Taste Affinity</span>
-          <span style="color:#66667a;font-size:9px">${d.affinityDelta>=0?'+':''}${d.affinityDelta.toFixed(2)}★ ${d.hasCommunity?'vs audience':'vs your avg'}</span>
+          <span style="color:#8c8ca2;font-size:8px;letter-spacing:2px;text-transform:uppercase">Taste Affinity</span>
+          <span style="color:#a0a0b4;font-size:9px">${d.affinityDelta>=0?'+':''}${d.affinityDelta.toFixed(2)}★ ${d.hasCommunity?'vs audience':'vs your avg'}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
           <div style="height:100%;width:${Math.round((d.affinityScore||0)*100)}%;background:linear-gradient(90deg,#c8a84088,#c8a840);border-radius:2px"></div>
@@ -1227,7 +1310,7 @@ function personCardHTML(d,rank,cat){
       </div>
       ${cat==='directors'?`<div class="cov-block" data-person="${esc(d.name)}" data-ac="${ac}">${coverageInnerHTML(d.name,ac)}</div>`:''}
     </div>
-    ${d.topFilms.length?`<div><div style="color:#44445a;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
+    ${d.topFilms.length?`<div><div style="color:#8c8ca2;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
   </div>`;
 }
 
@@ -1236,10 +1319,9 @@ function renderCategoryPanel(cat){
   const data=STATE[cat], top4=data.slice(0,4), un=STATE.userName;
   const catLabel=CAT_LABELS[cat], icon=CAT_ICONS[cat];
   const rushLabel=`${un?un+"'s ":'Your '}${catLabel} Mount Rushmore`;
-  const rankMap={}; data.forEach((d,i)=>rankMap[d.name]=i+1);
 
   if(!data.length){
-    return `<div style="text-align:center;padding:80px 0;color:#33334a">
+    return `<div style="text-align:center;padding:80px 0;color:#7d7d94">
       <div style="font-size:32px;margin-bottom:12px">${icon}</div>
       <div style="font-size:15px">Not enough ${catLabel.toLowerCase()} with ${MIN_FILMS}+ films in your library.</div>
     </div>`;
@@ -1249,7 +1331,7 @@ function renderCategoryPanel(cat){
   const searchId=`search-${cat}`, sortId=`sort-${cat}`;
 
   const top4CardsHTML=top4.map((d,i)=>personCardHTML(d,i+1,cat)).join('');
-  const alsoHTML=data.slice(4,14).map((d,i)=>`<div class="also-chip"><span style="color:#33334a;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(d.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</span></div>`).join('');
+  const alsoHTML=data.slice(4,14).map((d,i)=>`<div class="also-chip"><span style="color:#7d7d94;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(d.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</span></div>`).join('');
 
   return `
     <div style="margin-bottom:16px">
@@ -1258,12 +1340,12 @@ function renderCategoryPanel(cat){
     </div>
     <div id="svg-${cat}">${buildInlineSVG(top4,rushLabel)}</div>
     <div style="background:#0d0d1c;border:1px solid #1c1c2c;border-top:none;border-radius:0 0 12px 12px;padding:10px 20px;display:flex;gap:20px;flex-wrap:wrap;margin-bottom:22px">
-      <div style="font-size:11px"><span style="color:#77778a">Volume × Quality</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.ratingSum*100)}%</span></div>
-      <div style="font-size:11px"><span style="color:#77778a">Taste Affinity</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.top3Score*100)}%</span></div>
-      <div style="font-size:11px"><span style="color:#77778a">Rewatches</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.rewatches*100)}%</span></div>
-      <div style="font-size:11px"><span style="color:#77778a">Min films</span><span style="color:#c8a84077;margin-left:5px">${MIN_FILMS}</span></div>
+      <div style="font-size:11px"><span style="color:#a9a9bc">Volume × Quality</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.ratingSum*100)}%</span></div>
+      <div style="font-size:11px"><span style="color:#a9a9bc">Taste Affinity</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.top3Score*100)}%</span></div>
+      <div style="font-size:11px"><span style="color:#a9a9bc">Rewatches</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.rewatches*100)}%</span></div>
+      <div style="font-size:11px"><span style="color:#a9a9bc">Min films</span><span style="color:#c8a84077;margin-left:5px">${MIN_FILMS}</span></div>
       ${cat==='directors'?`<div style="flex:1"></div>
-      <button onclick="refineTopCoverage()" title="Fetch each director's full feature filmography from TMDB for exact coverage" style="background:none;border:1px solid #252535;border-radius:6px;padding:3px 10px;color:#77778a;font-family:inherit;font-size:11px;cursor:pointer">⟳ Exact filmography</button>`:''}
+      <button onclick="refineTopCoverage()" title="Fetch each director's full feature filmography from TMDB for exact coverage" style="background:none;border:1px solid #252535;border-radius:6px;padding:3px 10px;color:#a9a9bc;font-family:inherit;font-size:11px;cursor:pointer">⟳ Exact filmography</button>`:''}
     </div>
     <div class="ornament-rule">◆</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:32px">${top4CardsHTML}</div>
@@ -1273,13 +1355,13 @@ function renderCategoryPanel(cat){
       <div class="eyebrow" style="margin-bottom:8px">All ${catLabel} (${data.length})</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <input id="${searchId}" class="input-field" style="flex:1;min-width:180px" placeholder="Search ${catLabel.toLowerCase()}…" oninput="filterCat('${cat}')"/>
-        <select id="${sortId}" class="input-field" style="width:auto;cursor:pointer;background:#0e0e1c;border-color:#252535;color:#88889a" onchange="filterCat('${cat}')">
+        <select id="${sortId}" class="input-field" style="width:auto;cursor:pointer;background:#0e0e1c;border-color:#252535;color:#b2b2c4" onchange="filterCat('${cat}')">
           <option value="score">Sort: Score</option><option value="logvq">Sort: Vol × Quality</option><option value="affinity">Sort: Taste Affinity</option><option value="rated">Sort: Films Rated</option><option value="rating">Sort: Avg Rating</option><option value="rewatches">Sort: Rewatches</option>${cat==='directors'?'<option value="coverage">Sort: Filmography %</option>':''}<option value="name">Sort: Name A–Z</option>
         </select>
       </div>
     </div>
     <div id="grid-${cat}" class="dir-grid"></div>
-    <div id="empty-${cat}" style="text-align:center;color:#33334a;padding:40px 0;font-size:14px;display:none">No results match your search.</div>
+    <div id="empty-${cat}" style="text-align:center;color:#7d7d94;padding:40px 0;font-size:14px;display:none">No results match your search.</div>
   `;
 }
 
@@ -1305,7 +1387,9 @@ function buildRecommendations(mode){
     const completion=0.5*(cov.pct/100)+0.5*(1/Math.log2(remaining+2));
 
     for(const f of cov.missing){
-      if(STATE._activeGenre&&f.g&&f.g.split(',').indexOf(STATE._activeGenre)<0) continue;
+      // A candidate with no genre data used to slip past the filter and show up
+      // under every genre; with a filter on, unknown means excluded.
+      if(STATE._activeGenre&&(!f.g||f.g.split(',').indexOf(STATE._activeGenre)<0)) continue;
       // Films absent from the DB aren't in TMDB's top 20k, so they're genuinely niche
       const pop=Number.isFinite(f.rank)?1-f.rank/dbSize:0.15;
       const q=f.va?Math.min(1,f.va/5):null;
@@ -1342,14 +1426,14 @@ function recCardHTML(r,i){
   const search=`https://letterboxd.com/search/films/${encodeURIComponent(r.title)}/`;
   return `<div class="card" style="border:1px solid ${ac}22">
     <div style="display:flex;gap:10px;align-items:baseline;margin-bottom:6px">
-      <span class="mono" style="color:#2a2a3a;font-size:11px;flex-shrink:0">${String(i+1).padStart(2,'0')}</span>
+      <span class="mono" style="color:#777787;font-size:11px;flex-shrink:0">${String(i+1).padStart(2,'0')}</span>
       <div style="flex:1;min-width:0">
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(r.title)}</div>
-        <div style="color:#66667a;font-size:11px;margin-top:2px">${Number.isFinite(r.year)?r.year:'—'} · ${esc(r.director)}</div>
+        <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${Number.isFinite(r.year)?r.year:'—'} · ${esc(r.director)}</div>
       </div>
     </div>
-    <div style="color:#55556a;font-size:11px;margin-bottom:9px">
-      You've seen <span class="mono" style="color:#88889a">${r.covSeen}/${r.covTotal}</span> of their features${r.exact?'':' <span style="color:#3a3a52">(est.)</span>'}
+    <div style="color:#9595aa;font-size:11px;margin-bottom:9px">
+      You've seen <span class="mono" style="color:#b2b2c4">${r.covSeen}/${r.covTotal}</span> of their features${r.exact?'':' <span style="color:#83839b">(est.)</span>'}
     </div>
     <div style="height:3px;background:#1a1a2a;border-radius:2px;overflow:hidden;margin-bottom:10px">
       <div style="height:100%;width:${r.covPct}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px"></div>
@@ -1369,7 +1453,7 @@ function renderRecsPanel(){
   }).join('');
 
   if(!STATE.directors.length){
-    el.innerHTML=`<div style="text-align:center;padding:80px 0;color:#33334a">
+    el.innerHTML=`<div style="text-align:center;padding:80px 0;color:#7d7d94">
       <div style="font-size:32px;margin-bottom:12px">🍿</div>
       <div style="font-size:15px">No directors qualify yet — lower “Min films to qualify” in ⚖ Settings.</div></div>`;
     return;
@@ -1380,21 +1464,21 @@ function renderRecsPanel(){
     <div style="margin-bottom:16px">
       <div class="eyebrow" style="margin-bottom:5px">🍿 What to Watch Next</div>
       <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(STATE.userName?STATE.userName+"'s Watchlist":'Your Watchlist')}</h1>
-      <p style="color:#66667a;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">
         Unseen films from the directors you rate highest, weighted toward the filmographies you're closest to finishing.
       </p>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${tabs}</div>
-    <div style="color:#44445a;font-size:11px;margin-bottom:20px">${esc(w.hint)} — director affinity ${Math.round(w.affinity*100)}% · completion ${Math.round(w.completion*100)}% · ${w.invert?'obscurity':'acclaim'} ${Math.round(w.acclaim*100)}%</div>`;
+    <div style="color:#8c8ca2;font-size:11px;margin-bottom:20px">${esc(w.hint)} — director affinity ${Math.round(w.affinity*100)}% · completion ${Math.round(w.completion*100)}% · ${w.invert?'obscurity':'acclaim'} ${Math.round(w.acclaim*100)}%</div>`;
 
   if(!recs.length){
-    el.innerHTML=header+`<div style="text-align:center;padding:60px 0;color:#33334a">
+    el.innerHTML=header+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">Nothing to recommend${STATE._activeGenre?' in '+esc(STATE._activeGenre):''} — you've seen everything we know of.</div>
-      <div style="font-size:12px;margin-top:8px;color:#2a2a3a">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>`;
+      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>`;
     return;
   }
   el.innerHTML=header+`<div class="dir-grid">${recs.map(recCardHTML).join('')}</div>
-    <div style="color:#2a2a3a;font-size:11px;margin-top:20px;line-height:1.7">
+    <div style="color:#777787;font-size:11px;margin-top:20px;line-height:1.7">
       Drawn from ${STATE.directors.length} qualifying directors. Coverage marked “est.” comes from the built-in database,
       which only lists a director's best-known work — run ⟳ Exact filmography on the Directors tab for the full picture.
     </div>`;
@@ -1446,34 +1530,35 @@ function renderGenreStrip(){
   const ag=STATE._activeGenre;
   const chips=top.map(g=>{
     const active=ag===g.genre;
-    return `<button onclick='setGenreFilter(${JSON.stringify(g.genre)})' style="display:flex;align-items:center;gap:6px;background:${active?'#c8a840':'#111120'};border:1px solid ${active?'#c8a840':'#1e1e2e'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .15s">
+    return `<button type="button" onclick="setGenreFilter(${esc(JSON.stringify(g.genre))})" aria-pressed="${active}" style="display:flex;align-items:center;gap:6px;background:${active?'#c8a840':'#111120'};border:1px solid ${active?'#c8a840':'#1e1e2e'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .15s">
       <span style="color:${active?'#08080f':'#c8c0b0'};font-size:12px">${esc(String(g.genre))}</span>
       <span style="color:${active?'#08080f99':'#c8a84077'};font-size:10px">${esc(String(g.count))}</span>
       ${active?'<span style="color:#08080f;font-size:10px;margin-left:2px">×</span>':''}
     </button>`;
   }).join('');
-  const allChip=ag?`<button onclick="setGenreFilter(null)" style="display:flex;align-items:center;gap:4px;background:transparent;border:1px solid #2a2a3a;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;color:#55556a;font-size:12px;transition:all .15s">All genres</button>`:'';
+  const allChip=ag?`<button onclick="setGenreFilter(null)" style="display:flex;align-items:center;gap:4px;background:transparent;border:1px solid #2a2a3a;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;color:#9595aa;font-size:12px;transition:all .15s">All genres</button>`:'';
   document.getElementById('genre-chips').innerHTML=allChip+chips;
 }
 
 function renderConformityStrip(){
   const el=document.getElementById('conformity-strip');
   const c=STATE._conformity;
-  if(!c){el.style.display='none';return;}
+  // Clear as well as hide — otherwise the previous library's score sits in the DOM
+  if(!c){el.style.display='none';el.innerHTML='';return;}
   const barColor=c.score>=70?'#4a9a6a':c.score>=50?'#c8a840':'#c85040';
   el.style.display='';
   el.innerHTML=`<div style="background:#08080f;border-bottom:1px solid #111120;padding:12px 0">
     <div class="wrap">
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        <span style="color:#44445a;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Conformity</span>
+        <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Conformity</span>
         <div style="flex:1;min-width:120px;max-width:260px">
           <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
             <div style="height:100%;width:${c.score}%;background:linear-gradient(90deg,${barColor}88,${barColor});border-radius:2px;transition:width .4s ease"></div>
           </div>
         </div>
         <span style="color:${barColor};font-size:13px;font-weight:bold;flex-shrink:0">${c.score}%</span>
-        <span style="color:#55556a;font-size:12px;flex-shrink:0">${c.label}</span>
-        <span style="color:#2a2a3a;font-size:11px;flex-shrink:0">based on ${c.filmCount} films vs. community</span>
+        <span style="color:#9595aa;font-size:12px;flex-shrink:0">${c.label}</span>
+        <span style="color:#777787;font-size:11px;flex-shrink:0">based on ${c.filmCount} films vs. community</span>
       </div>
     </div>
   </div>`;
@@ -1530,6 +1615,13 @@ function resetWeights(){
 
 let _renderTimer;
 function scheduleRender(){ clearTimeout(_renderTimer); _renderTimer=setTimeout(reScoreAndRender,60); }
+// The recs panel is rebuilt from every director's coverage, so collapse bursts —
+// refineTopCoverage alone used to trigger eight full rebuilds for four directors.
+let _recsTimer;
+function scheduleRecsRender(){ clearTimeout(_recsTimer); _recsTimer=setTimeout(renderRecsPanel,80); }
+// Same for the feature-length slider, which fires on every step of a drag
+let _covTimer;
+function scheduleCoverageRefresh(){ clearTimeout(_covTimer); _covTimer=setTimeout(refreshAllCoverage,60); }
 
 // Re-run scoring (and optionally map-building) without re-fetching
 function computeConformity(films, filmData){
@@ -1589,8 +1681,8 @@ function onSettingSlider(key, val){
   const v=parseInt(val);
   if(key==='minRuntime'){
     MIN_RUNTIME=v;
-    document.getElementById('lbl-minRuntime').textContent=v+' min';
-    refreshAllCoverage();
+    document.getElementById('lbl-minRuntime').textContent=v+' min';   // label stays instant
+    scheduleCoverageRefresh();
     return;
   }
   document.getElementById('lbl-'+key).textContent=v;
@@ -1605,11 +1697,35 @@ function onSettingSlider(key, val){
   if(STATE.directors.length||STATE.writers.length||STATE.actors.length) scheduleRender();
 }
 
+// ─── Modal open/close ─────────────────────────────────────────────────────────
+// Shared so both dialogs move focus in and hand it back, and Escape works. Without
+// this, opening a modal left focus on the page behind it — a screen reader was never
+// told anything had happened, and there was no way out except a mouse click.
+let _lastFocus=null;
+function openModalEl(id){
+  _lastFocus=document.activeElement;
+  const el=document.getElementById(id);
+  el.classList.add('open');
+  const close=el.querySelector('.modal-close');
+  if(close) close.focus();
+}
+function closeModalEl(id){
+  document.getElementById(id).classList.remove('open');
+  if(_lastFocus&&typeof _lastFocus.focus==='function') _lastFocus.focus();
+  _lastFocus=null;
+}
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape') return;
+  const f=document.getElementById('filmog-modal'), h=document.getElementById('how-modal');
+  if(f&&f.classList.contains('open')) closeFilmogModal();
+  else if(h&&h.classList.contains('open')) closeModal();
+});
+
 function openModal(){
   updateModalText();
-  document.getElementById('how-modal').classList.add('open');
+  openModalEl('how-modal');
 }
-function closeModal(){ document.getElementById('how-modal').classList.remove('open'); }
+function closeModal(){ closeModalEl('how-modal'); }
 
 function updateModalText(){
   const fmt=v=>(v*100).toFixed(0)+'%';
@@ -1726,13 +1842,13 @@ function renderShareCatPanel(data,cat,userName){
   const top4=data.slice(0,4);
   const label=CAT_LABELS[cat], icon=CAT_ICONS[cat];
   const rushLabel=(userName?userName+"'s ":'')+label+' Mount Rushmore';
-  if(!top4.length) return `<div style="text-align:center;padding:60px 0;color:#33334a"><div style="font-size:32px;margin-bottom:10px">${icon}</div><div>No ${label.toLowerCase()} data in this share.</div></div>`;
+  if(!top4.length) return `<div style="text-align:center;padding:60px 0;color:#7d7d94"><div style="font-size:32px;margin-bottom:10px">${icon}</div><div>No ${label.toLowerCase()} data in this share.</div></div>`;
   const cards=top4.map((d,i)=>{
     const rc=RANK_COLORS[i]||'#9999bb';
-    const films=(d.topFilms||[]).map(f=>`<div style="color:#88889a;font-size:11px;margin-top:2px">${esc(f.name)}${f.year?' ('+f.year+')':''} ${f.rating?'★'+f.rating:''}</div>`).join('');
-    return `<div style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:12px;padding:18px;flex:1;min-width:160px"><div style="color:${rc};font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:6px">#${i+1}</div><div style="font-size:15px;font-weight:600;color:#f0e8d8;margin-bottom:4px">${esc(d.name)}</div><div style="color:#55556a;font-size:12px;margin-bottom:6px">${d.filmCount} films${d.avgRating>0?' · ★'+d.avgRating.toFixed(1):''}</div>${films}</div>`;
+    const films=(d.topFilms||[]).map(f=>`<div style="color:#b2b2c4;font-size:11px;margin-top:2px">${esc(f.name)}${f.year?' ('+f.year+')':''} ${f.rating?'★'+f.rating:''}</div>`).join('');
+    return `<div style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:12px;padding:18px;flex:1;min-width:160px"><div style="color:${rc};font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:6px">#${i+1}</div><div style="font-size:15px;font-weight:600;color:#f0e8d8;margin-bottom:4px">${esc(d.name)}</div><div style="color:#9595aa;font-size:12px;margin-bottom:6px">${d.filmCount} films${d.avgRating>0?' · ★'+d.avgRating.toFixed(1):''}</div>${films}</div>`;
   }).join('');
-  return `<div class="share-banner"><div><div style="color:#f0e8d8;font-size:15px;font-weight:bold;margin-bottom:4px">${esc(rushLabel)}</div><div style="color:#55556a;font-size:12px">Scored from Letterboxd data</div></div><button class="share-copy-btn" onclick="navigator.clipboard.writeText(window.location.href).then(()=>showToast('Link copied!')).catch(()=>prompt('Copy this link:',window.location.href))">🔗 Copy Link</button></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px">${cards}</div>`;
+  return `<div class="share-banner"><div><div style="color:#f0e8d8;font-size:15px;font-weight:bold;margin-bottom:4px">${esc(rushLabel)}</div><div style="color:#9595aa;font-size:12px">Scored from Letterboxd data</div></div><button class="share-copy-btn" onclick="navigator.clipboard.writeText(window.location.href).then(()=>showToast('Link copied!')).catch(()=>prompt('Copy this link:',window.location.href))">🔗 Copy Link</button></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px">${cards}</div>`;
 }
 
 function switchShareCat(cat){
@@ -1744,19 +1860,27 @@ function switchShareCat(cat){
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 STATE._filmog=loadFilmogCache();   // exact filmographies fetched in earlier sessions
-updateConfigBadge();
-if(!loadShareFromHash()) showPage('page-upload');
+// Everything below touches the DOM, and #page-share / #share-toast are declared
+// after this script block — so wait for the parser rather than running inline.
+// Running early made every share link fail as "corrupted": renderShareView threw
+// on a null element and the catch reported it as a bad payload.
+function initApp(){
+  updateConfigBadge();
+  if(!loadShareFromHash()) showPage('page-upload');
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initApp);
+else initApp();
 window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#share=')) loadShareFromHash(); });
 </script>
 
 <!-- ══════════════════════════════════ HOW IT WORKS MODAL -->
 <div id="how-modal" class="modal-bg" onclick="if(event.target===this)closeModal()">
-  <div class="modal-box">
-    <button class="modal-close" onclick="closeModal()">✕</button>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-label="How it works">
+    <button class="modal-close" onclick="closeModal()" aria-label="Close">✕</button>
     <div class="eyebrow" style="margin-bottom:10px">About</div>
     <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:18px">How It Works</h2>
 
-    <div style="color:#88889a;font-size:13px;line-height:1.8;margin-bottom:20px">
+    <div style="color:#b2b2c4;font-size:13px;line-height:1.8;margin-bottom:20px">
       Your Mount Rushmore is the four directors, writers, and actors who define your personal taste — scored by how much you've watched them, how highly you rated their work, and how far above the community average you rate them.
     </div>
 
@@ -1764,29 +1888,29 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:10px">The Scoring Formula</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">📈 Volume × Quality</div><div style="color:#55556a;font-size:11px">Films seen × avg rating on a log scale — watching 10 films at 4★ beats 3 films at 5★, with diminishing returns on volume</div></div>
+          <div><div style="color:#e0d8c8;font-size:13px">📈 Volume × Quality</div><div style="color:#9595aa;font-size:11px">Films seen × avg rating on a log scale — watching 10 films at 4★ beats 3 films at 5★, with diminishing returns on volume</div></div>
           <div id="modal-w-ratingSum" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">65%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">✨ Taste Affinity</div><div style="color:#55556a;font-size:11px">How far above the community average you rate their films — highlights your personal favorites over crowd pleasers</div></div>
-          <div id="modal-w-top3Score" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">25%</div>
+          <div><div style="color:#e0d8c8;font-size:13px">✨ Taste Affinity</div><div style="color:#9595aa;font-size:11px">How far above the community average you rate their films — highlights your personal favorites over crowd pleasers</div></div>
+          <div id="modal-w-top3Score" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">30%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">🔁 Rewatches</div><div style="color:#55556a;font-size:11px">Films you've logged more than once — a strong signal of genuine love</div></div>
-          <div id="modal-w-rewatches" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">10%</div>
+          <div><div style="color:#e0d8c8;font-size:13px">🔁 Rewatches</div><div style="color:#9595aa;font-size:11px">Films you've logged more than once — a strong signal of genuine love</div></div>
+          <div id="modal-w-rewatches" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">5%</div>
         </div>
       </div>
-      <div style="color:#44445a;font-size:11px;margin-top:10px;line-height:1.6">Weights are normalized so the relative ratios always matter, even if they don't sum to 100%. Adjust them with the ⚖ Settings button. Minimum <span id="modal-min-films">3</span> films required to qualify.</div>
+      <div style="color:#8c8ca2;font-size:11px;margin-top:10px;line-height:1.6">Weights are normalized so the relative ratios always matter, even if they don't sum to 100%. Adjust them with the ⚖ Settings button. Minimum <span id="modal-min-films">3</span> films required to qualify.</div>
     </div>
 
     <div style="margin-bottom:18px">
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Your Data</div>
-      <div style="color:#88889a;font-size:13px;line-height:1.8">Your Letterboxd export is processed entirely in your browser. Nothing is sent to any server except the TMDB API for director/writer/actor lookups. Your API key is stored only in your browser's localStorage and never leaves your device.</div>
+      <div style="color:#b2b2c4;font-size:13px;line-height:1.8">Your Letterboxd export is processed entirely in your browser. Nothing is sent to any server except the TMDB API for director/writer/actor lookups. Your API key is stored only in your browser's localStorage and never leaves your device.</div>
     </div>
 
     <div style="margin-bottom:18px">
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Filmography Coverage</div>
-      <div style="color:#88889a;font-size:13px;line-height:1.8">
+      <div style="color:#b2b2c4;font-size:13px;line-height:1.8">
         Each director card shows how much of their <b style="color:#c8c0b0">feature filmography</b> you've seen.
         What counts as a feature is two tests, both adjustable under ⚖ Settings: a <b style="color:#c8c0b0">length</b>
         test (40 minutes by default, the Academy's threshold) and a <b style="color:#c8c0b0">kind</b> test —
@@ -1804,7 +1928,7 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
 
     <div style="margin-bottom:18px">
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">🍿 Watch Next</div>
-      <div style="color:#88889a;font-size:13px;line-height:1.8">
+      <div style="color:#b2b2c4;font-size:13px;line-height:1.8">
         Every film you haven't seen by a director who qualifies, ranked on three axes:
         <b style="color:#c8c0b0">affinity</b> (how highly you rate them),
         <b style="color:#c8c0b0">completion</b> (how near you are to finishing them — both how far along you are
@@ -1817,15 +1941,15 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
 
     <div>
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Writers &amp; Actors</div>
-      <div style="color:#88889a;font-size:13px;line-height:1.8">Writers are credited for Screenplay, Story, and Adaptation roles. Actors are the top <span id="modal-top-actors">5</span> billed cast members per film. Both use the same scoring formula as directors.</div>
+      <div style="color:#b2b2c4;font-size:13px;line-height:1.8">Writers are credited for Screenplay, Story, and Adaptation roles. Actors are the top <span id="modal-top-actors">5</span> billed cast members per film. Both use the same scoring formula as directors.</div>
     </div>
   </div>
 </div>
 
 <!-- ══════════════════════════════════ FILMOGRAPHY / MISSING FILMS MODAL -->
 <div id="filmog-modal" class="modal-bg" onclick="if(event.target===this)closeFilmogModal()">
-  <div class="modal-box">
-    <button class="modal-close" onclick="closeFilmogModal()">✕</button>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-label="Director filmography">
+    <button class="modal-close" onclick="closeFilmogModal()" aria-label="Close">✕</button>
     <div id="filmog-modal-body"></div>
   </div>
 </div>
@@ -1847,7 +1971,7 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
   <div id="share-genre-strip" style="display:none;background:#080810;border-bottom:1px solid #111120;padding:14px 0">
     <div class="wrap">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <span style="color:#44445a;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Top Genres</span>
+        <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Top Genres</span>
         <div id="share-genre-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
     </div>
@@ -1856,9 +1980,9 @@ window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#
   <div id="share-cat-writers"   class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="share-cat-actors"    class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div style="background:#06060f;border-top:1px solid #151525;padding:40px 20px;text-align:center">
-    <div style="color:#44445a;font-size:10px;letter-spacing:5px;text-transform:uppercase;margin-bottom:12px">Built with</div>
+    <div style="color:#8c8ca2;font-size:10px;letter-spacing:5px;text-transform:uppercase;margin-bottom:12px">Built with</div>
     <div style="font-family:'Playfair Display',Georgia,serif;font-size:26px;color:#f0e8d8;font-weight:700;margin-bottom:6px">Cinematic Mount Rushmore</div>
-    <div style="color:#55556a;font-size:14px;margin-bottom:24px">Find the directors, writers &amp; actors who define your taste — scored from your Letterboxd data.</div>
+    <div style="color:#9595aa;font-size:14px;margin-bottom:24px">Find the directors, writers &amp; actors who define your taste — scored from your Letterboxd data.</div>
     <button class="btn-gold" onclick="showPage('page-upload')" style="font-size:16px;padding:14px 32px">Make Your Own →</button>
   </div>
 </div>
