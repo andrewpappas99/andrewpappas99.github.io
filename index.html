@@ -584,17 +584,25 @@ async function lookupOneTMDB(film, apiKey, signal){
     movie=results.find(r=>Math.abs(parseInt((r.release_date||'').slice(0,4))-film.year)<=1);
     if(!movie) return null;
   }
-  // Credits — single call returns director + writers + cast
-  res=await fetch(`${base}/movie/${movie.id}/credits?api_key=${key}`,{signal});
+  // Detail with credits appended — one call, and unlike /credits it also carries
+  // runtime and full genre names. Runtime matters because the DB tier has it and
+  // the two shapes must agree, or a film would lose its runtime the moment it was
+  // looked up live: no hours in the history, no feature test in the coverage maths.
+  res=await fetch(`${base}/movie/${movie.id}?api_key=${key}&append_to_response=credits&language=en-US`,{signal});
   if(!res.ok) return null;
-  const cred=await res.json();
+  const det=await res.json();
+  const cred=det.credits||{};
   const crew=cred.crew||[], cast=cred.cast||[];
   const director=(crew.find(c=>c.job==='Director')||{}).name||null;
   const writers=[...new Set(crew.filter(c=>WRITING_JOBS.has(c.job)).map(c=>c.name))].slice(0,3);
   const actors=cast.slice(0,10).map(c=>c.name); // store top 10, slice at scoring time per TOP_ACTORS setting
-  const genres=(movie.genre_ids||[]).map(id=>TMDB_GENRES[id]).filter(Boolean);
-  const voteAvg=movie.vote_average?movie.vote_average/2:null; // TMDB 0-10 → 0-5 scale
-  return {director,writers,actors,genres,voteAvg};
+  // Names from the payload rather than genre_ids through TMDB_GENRES. That table
+  // called 878 "Sci-Fi" where the built-in DB stores TMDB's own "Science Fiction",
+  // so a library drawing on both tiers listed the genre twice and split its count.
+  const genres=(det.genres||[]).map(g=>g.name).filter(Boolean);
+  const voteAvg=det.vote_average?det.vote_average/2:null;   // TMDB 0-10 → 0-5 scale
+  const runtime=parseInt(det.runtime,10)||0;
+  return {director,writers,actors,genres,voteAvg,runtime};
 }
 
 async function fetchCrewTMDB(films, apiKey, onProg, signal){
@@ -630,13 +638,33 @@ async function fetchCrewTMDB(films, apiKey, onProg, signal){
 
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
+// The built-in DB is a snapshot, so it is least trustworthy at its leading edge.
+// A film released after the snapshot is simply absent — and if an older film
+// happens to share its title and release year, the lookup returns that one with
+// nothing at all to signal the swap. That is how a 2026 diary entry for Nolan's
+// The Odyssey came back credited to Marcel Walz, whose same-titled 2026 film was
+// the one the snapshot happened to hold.
+//
+// Nothing in a Title||Year key can distinguish the two, so films from the
+// snapshot year onward are confirmed against TMDB whenever a key is available.
+function dbSnapshotYear(){
+  const meta=window.FILM_DB_META;
+  const m=meta&&/^(\d{4})-\d{2}-\d{2}$/.exec(String(meta.built||''));
+  // Databases built before the date was recorded: assume a year of drift.
+  return m?parseInt(m[1],10):new Date().getFullYear()-1;
+}
+
 async function fetchCrewHybrid(films, apiKey, onProg, signal){
   // Phase 1: instant DB lookup
   const filmData={};
-  const misses=[];
+  const misses=[], recent=[];
+  const edge=dbSnapshotYear();
+  // Matched, but new enough that the snapshot may hold a different film under the
+  // same key. The DB row is kept either way, so a failed lookup costs nothing.
+  const flagRecent=f=>{ if(Number.isFinite(f.year)&&f.year>=edge) recent.push(f); };
   for(const film of films){
     const r=lookupFromDB(film);
-    if(r) filmData[film.name+'||'+film.year]=r;
+    if(r){ filmData[film.name+'||'+film.year]=r; flagRecent(film); }
     else misses.push(film);
   }
   // Second pass: same DB, fuzzier key. Keyed by the user's Title||Year so every
@@ -645,16 +673,22 @@ async function fetchCrewHybrid(films, apiKey, onProg, signal){
     const r=lookupFuzzyFromDB(misses[i]);
     if(!r) continue;
     filmData[misses[i].name+'||'+misses[i].year]=r;
+    flagRecent(misses[i]);
     misses.splice(i,1);
   }
   const dbHits=films.length-misses.length;
-  // Phase 2: TMDB fallback for films not in the built-in DB (requires API key)
-  if(apiKey&&misses.length){
-    onProg(10,`Built-in DB: ${dbHits} matched, ${misses.length} not found — fetching from TMDB…`);
-    const tmdbData=await fetchCrewTMDB(misses,apiKey,onProg,signal);
+  // Phase 2: TMDB for films the DB lacks, plus the recent ones it may have wrong
+  if(apiKey&&(misses.length||recent.length)){
+    const parts=[`Built-in DB: ${dbHits} matched`];
+    if(misses.length) parts.push(`${misses.length} not found`);
+    if(recent.length) parts.push(`${recent.length} newer than the database`);
+    onProg(10,parts.join(', ')+' — checking TMDB…');
+    const tmdbData=await fetchCrewTMDB(misses.concat(recent),apiKey,onProg,signal);
     if(signal?.aborted) return null;
+    // Live data overwrites the DB row for the recent films and fills the gaps for
+    // the rest; anything TMDB could not resolve keeps whatever the DB gave it.
     if(tmdbData) Object.assign(filmData,tmdbData);
-    STATE._dbMisses=misses.length-Object.keys(tmdbData||{}).length;
+    STATE._dbMisses=misses.filter(f=>!filmData[f.name+'||'+f.year]).length;
   } else {
     onProg(10,`Built-in DB: ${dbHits} matched${misses.length?' — '+misses.length+' not found':''}${misses.length&&!apiKey?' (add TMDB key for full coverage)':''}`);
     STATE._dbMisses=misses.length;
