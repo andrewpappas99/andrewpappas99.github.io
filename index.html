@@ -73,6 +73,12 @@ input,select,button{font-family:inherit}
 .cov-click{display:block;width:calc(100% + 10px);background:none;border:none;font:inherit;color:inherit;text-align:left;cursor:pointer;border-radius:5px;margin:-3px -5px;padding:3px 5px;transition:background .15s}
 .cov-click:hover{background:#ffffff0a}
 .cov-click:focus-visible,.nav-tab:focus-visible,.btn-gold:focus-visible,.btn-ghost:focus-visible,.modal-close:focus-visible{outline:2px solid #c8a840;outline-offset:2px}
+.hist-bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;background:none;border:none;padding:0;cursor:pointer;border-radius:3px;transition:opacity .15s}
+.hist-bar:hover:not(:disabled){opacity:.7}
+.hist-bar:disabled{cursor:default}
+.hist-bar:focus-visible,.hist-card:focus-visible{outline:2px solid #c8a840;outline-offset:2px}
+.hist-card{display:block;width:100%;text-align:left;background:none;border:none;padding:0;font:inherit;color:inherit;cursor:pointer;border-radius:12px}
+.hist-card:hover .hist-card-in{border-color:#3a3a52;background:#111124}
 /* Mobile */
 @media(max-width:640px){
   .nav-inner{height:auto;padding:8px 12px;gap:6px}
@@ -1723,24 +1729,125 @@ function histSubhead(title,note){
 
 // Twelve buckets, scaled to the busiest one. Absolute counts would make a quiet
 // year invisible next to a loud one, and each strip is read on its own.
-function histMonthStrip(counts,accent){
+//
+// Every bucket is a button: a bar that says "eleven in March" and then refuses
+// to say which eleven is a dead end, and the viewings are already in memory.
+function histBarStrip(counts,accent,labels,longLabels,year,kind,gap){
   const max=Math.max(1,...counts);
-  return `<div style="display:flex;gap:3px;align-items:flex-end;height:42px">${
-    counts.map((n,i)=>`<div title="${MONTHS_LONG[i]}: ${n} viewing${n!==1?'s':''}" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%">
-      <div style="height:${n?Math.max(3,Math.round(n/max*40)):2}px;background:${n?accent:'#16162a'};opacity:${n?(0.4+0.6*n/max).toFixed(2):1};border-radius:2px"></div></div>`).join('')}</div>
-    <div style="display:flex;gap:3px;margin-top:5px">${
-      MONTHS.map(m=>`<div style="flex:1;text-align:center;color:#6e6e86;font-size:9px">${m[0]}</div>`).join('')}</div>`;
+  const g=gap||3;
+  return `<div style="display:flex;gap:${g}px;align-items:flex-end;height:42px">${
+    counts.map((n,i)=>{
+      const h=n?Math.max(3,Math.round(n/max*40)):2;
+      const what=`${longLabels[i]}: ${n} viewing${n!==1?'s':''}`;
+      return `<button type="button" class="hist-bar"${n?'':' disabled'} title="${esc(what)}" aria-label="${esc(what+(n?'. Show them.':''))}" onclick="openHistList(${year||0},'${kind}',${i})"><span style="display:block;height:${h}px;background:${n?accent:'#16162a'};opacity:${n?(0.4+0.6*n/max).toFixed(2):1};border-radius:2px"></span></button>`;
+    }).join('')}</div>
+    <div style="display:flex;gap:${g}px;margin-top:5px">${
+      labels.map(l=>`<div style="flex:1;text-align:center;color:#6e6e86;font-size:9px">${l}</div>`).join('')}</div>`;
 }
 
-function histYearBars(years){
-  const max=Math.max(1,...years.map(y=>y.viewings));
-  return years.map(y=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+function histMonthStrip(counts,accent,year){
+  return histBarStrip(counts,accent,MONTHS.map(m=>m[0]),MONTHS_LONG,year,'month',3);
+}
+
+// Seven buckets. The month strip answers "when in the year"; this one answers
+// "which night", and they are not the same habit.
+function histDowStrip(counts,accent,year){
+  return histBarStrip(counts,accent,DOW.map(d=>d.slice(0,2)),DOW_LONG,year,'dow',5);
+}
+
+// Half-star buckets. A year's average barely moves from one to the next — what
+// moves is whether you use the whole scale or park everything on four.
+function histRatingBars(hist,accent,year){
+  const labels=hist.map((n,i)=>(i+1)%2===0?String((i+1)/2):'');
+  const longs=hist.map((n,i)=>'★'+((i+1)/2));
+  return histBarStrip(hist,accent,labels,longs,year,'rating',4);
+}
+
+function fmtAge(n){
+  if(n==null) return '—';
+  if(n<=0) return 'new';
+  return (n%1?n.toFixed(1):n)+' yr';
+}
+
+// Median age of the films watched, year by year. The decade movers below say
+// which eras moved; this says the thing they add up to.
+function histAgeBars(years){
+  const rows=years.filter(y=>y.medianAge!=null);
+  if(!rows.length) return '';
+  const max=Math.max(1,...rows.map(y=>y.medianAge));
+  return rows.map(y=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
     <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${y.year}</span>
     <div style="flex:1;background:#0e0e1c;border-radius:100px;height:10px;overflow:hidden;min-width:60px">
-      <div style="width:${Math.round(y.viewings/max*100)}%;height:100%;background:linear-gradient(90deg,#6a5010,#c8a840);border-radius:100px"></div></div>
+      <div style="width:${Math.round(y.medianAge/max*100)}%;height:100%;background:linear-gradient(90deg,#25404f,#6fa8c8);border-radius:100px"></div></div>
+    <span class="mono" title="median age of the films you watched" style="color:#c8c0ae;font-size:11px;width:48px;text-align:right;flex-shrink:0">${fmtAge(y.medianAge)}</span>
+    <span class="mono" title="${y.newReleases||0} of ${y.ageKnown} were released that same year" style="color:#7d7d94;font-size:11px;width:38px;text-align:right;flex-shrink:0">${y.newShare!=null?Math.round(y.newShare*100)+'%':'—'}</span>
+  </div>`).join('');
+}
+
+// Seven buckets over a year will always have a tallest one. Calling it "your
+// night" is only true if it stands clear of the others — 16 Saturdays against a
+// 13-a-night average is a coin landing heads, not a habit. Below the threshold
+// the strip still shows the shape and the sentence says there isn't one.
+const DOW_PEAK_RATIO = 1.25;
+function dowClaim(counts){
+  const total=counts.reduce((a,b)=>a+b,0);
+  if(!total) return null;
+  const i=counts.indexOf(Math.max(...counts));
+  return {i, n:counts[i], clear:counts[i] >= (total/7)*DOW_PEAK_RATIO};
+}
+
+function histChips(items){
+  const on=items.filter(Boolean);
+  if(!on.length) return '';
+  return `<div style="display:flex;gap:9px;flex-wrap:wrap">${on.map(c=>
+    `<div title="${esc(c.t||'')}" style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:9px;padding:9px 13px;min-width:74px">
+      <div class="mono" style="color:#c8a840;font-size:16px;font-weight:bold;line-height:1.15">${c.v}</div>
+      <div style="color:#7d7d94;font-size:10px;margin-top:3px">${c.l}</div>
+    </div>`).join('')}</div>`;
+}
+
+// Films with more than one sitting. The rating chain is the point — a verdict
+// that moved is worth more than a tally of how often you put something on.
+function histRepeatRows(list){
+  return list.map(f=>{
+    const chain=f.views.map(v=>v.rating>0?histStars(v.rating):'<span style="color:#5e5e76">unrated</span>').join('<span style="color:#4a4a60"> → </span>');
+    const ch=f.change;
+    const badge=ch==null||ch===0?'' :
+      ch>0?`<span class="mono" style="color:#c8a840;font-size:11px;white-space:nowrap">▲ ${ch.toFixed(1)}</span>`
+          :`<span class="mono" style="color:#9a7f7f;font-size:11px;white-space:nowrap">▼ ${Math.abs(ch).toFixed(1)}</span>`;
+    return `<div style="padding:9px 0;border-bottom:1px solid #14141f">
+      <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+        <span style="color:#f0e8d8;font-size:13px;font-weight:600">${esc(f.name)}</span>
+        <span class="mono" style="color:#6e6e86;font-size:11px">${Number.isFinite(f.filmYear)?f.filmYear:'—'}</span>
+        ${f.director?`<span style="color:#7d7d94;font-size:11px">${esc(f.director)}</span>`:''}
+        <span style="flex:1"></span>
+        <span class="mono" style="color:#83839b;font-size:11px;white-space:nowrap">${f.count}×</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:4px">
+        <span style="color:#c8a840;font-size:12px">${chain}</span>
+        ${badge}
+        <span style="flex:1"></span>
+        <span class="mono" style="color:#6e6e86;font-size:10px">${f.views.map(v=>v.date).join(' · ')}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Ranking a year that still has three months left against finished ones reads
+// as a result when it is a snapshot. The solid bar is what happened; the hatch
+// behind it is where the year lands if the current rate holds.
+function histYearBars(years){
+  const max=Math.max(1,...years.map(y=>y.pace?Math.max(y.viewings,y.pace.projected):y.viewings));
+  return years.map(y=>{
+    const proj=y.pace?y.pace.projected:null;
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+    <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${y.year}</span>
+    <div style="flex:1;background:#0e0e1c;border-radius:100px;height:10px;min-width:60px;position:relative;overflow:hidden">
+      ${proj?`<div title="on pace for about ${proj} by December" style="position:absolute;top:0;bottom:0;left:0;width:${Math.round(proj/max*100)}%;background:repeating-linear-gradient(90deg,#4a3a12 0 3px,transparent 3px 7px);border-radius:100px"></div>`:''}
+      <div style="position:absolute;top:0;bottom:0;left:0;width:${Math.round(y.viewings/max*100)}%;background:linear-gradient(90deg,#6a5010,#c8a840);border-radius:100px"></div></div>
     <span class="mono" style="color:#c8c0ae;font-size:11px;width:30px;text-align:right;flex-shrink:0">${y.viewings}</span>
     <span class="mono" style="color:#7d7d94;font-size:11px;width:38px;text-align:right;flex-shrink:0">${y.avgRating!=null?'★'+y.avgRating.toFixed(1):'—'}</span>
-  </div>`).join('');
+  </div>`;}).join('');
 }
 
 // A trend row is share-of-year (bar) against share-of-all-time (the pale tick).
@@ -1768,18 +1875,64 @@ function histTrendRows(rows,fmtKey){
 function histFilmCard(v,i){
   const rc=RANK_COLORS[i]||'#9999bb';
   const g=(v.genres||[]).slice(0,2).join(' · ');
-  return `<div style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:12px;padding:16px;flex:1;min-width:168px">
+  // A director is only a way in when the app scored them — below the min-films
+  // slider there is no filmography panel to open. The chevron is the tell, so a
+  // card that does nothing never looks like a card that does.
+  const open=v.director&&dirByName(v.director);
+  const inner=`<div class="hist-card-in" style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:12px;padding:16px;height:100%;transition:border-color .15s,background .15s">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:7px">
       <span style="color:${rc};font-size:10px;font-weight:700;letter-spacing:1px">#${i+1}</span>
       <span style="color:#c8a840;font-size:12px;white-space:nowrap">${v.rating>0?histStars(v.rating):'<span style="color:#7d7d94;font-size:11px">unrated</span>'}</span>
     </div>
     <div style="font-size:15px;font-weight:600;color:#f0e8d8;line-height:1.3;margin-bottom:3px">${esc(v.name)}</div>
     <div style="color:#83839b;font-size:11px;margin-bottom:8px">${Number.isFinite(v.filmYear)?v.filmYear:'—'}</div>
-    ${v.director?`<div style="color:#c8c0ae;font-size:12px">${esc(v.director)}</div>`:'<div style="color:#5e5e76;font-size:12px">Director unknown</div>'}
+    ${v.director
+      ? `<div style="color:${open?'#c8a840':'#c8c0ae'};font-size:12px">${esc(v.director)}${open?' <span aria-hidden="true" style="opacity:.7">›</span>':''}</div>`
+      : '<div style="color:#5e5e76;font-size:12px">Director unknown</div>'}
     ${g?`<div style="color:#7d7d94;font-size:11px;margin-top:3px">${esc(g)}</div>`:''}
     <div style="color:#6e6e86;font-size:10px;margin-top:10px;border-top:1px solid #14141f;padding-top:7px">Watched ${histDate(v.date)}</div>
   </div>`;
+  return `<div style="flex:1;min-width:168px;display:flex">${open
+    ? `<button type="button" class="hist-card" title="${esc(v.director)}'s filmography" aria-label="${esc('Open '+v.director+"'s filmography")}" onclick="openFilmogModal(${esc(JSON.stringify(v.director))})">${inner}</button>`
+    : inner}</div>`;
 }
+
+// Every bar on the page is a filter over the same viewing list, so one renderer
+// serves all of them. Year 0 means the all-time strips in the overview.
+function openHistList(year,kind,idx){
+  const h=getHistory(), body=document.getElementById('hist-modal-body');
+  if(!h||!body) return;
+  let rows=year?h.rows.filter(v=>v.y===year):h.rows;
+  let title='';
+  if(kind==='month'){ rows=rows.filter(v=>v.mo===idx); title=MONTHS_LONG[idx]+(year?' '+year:''); }
+  else if(kind==='dow'){ rows=rows.filter(v=>v.dow===idx); title=DOW_LONG[idx]+'s'+(year?' in '+year:''); }
+  else if(kind==='rating'){ rows=rows.filter(v=>v.rating>0&&Math.round(v.rating*2)-1===idx);
+    title='Rated '+histStars((idx+1)/2)+(year?' in '+year:''); }
+  else return;
+  if(!rows.length) return;
+
+  rows=[...rows].sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
+  const rated=rows.filter(v=>v.rating>0);
+  const avg=rated.length?rated.reduce((a,v)=>a+v.rating,0)/rated.length:null;
+  const mins=rows.reduce((a,v)=>a+v.runtime,0);
+  const revisits=rows.filter(v=>v.revisit).length;
+  const facts=[`${rows.length} viewing${rows.length!==1?'s':''}`,
+    avg!=null&&kind!=='rating'?'★'+avg.toFixed(2):'',
+    mins?fmtDuration(mins):'',
+    revisits?`${revisits} revisit${revisits!==1?'s':''}`:''].filter(Boolean).join(' · ');
+
+  body.innerHTML=`
+    <div style="color:#c8c0b0;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">${esc(title)}</div>
+    <div style="color:#8c8ca2;font-size:12px;margin-bottom:16px">${facts}${year?'':' · across every year in your diary'}</div>
+    ${rows.map(v=>`<div style="display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid #14141f;flex-wrap:wrap">
+      <span class="mono" style="color:#83839b;font-size:11px;width:72px;flex-shrink:0">${v.date}</span>
+      <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:130px">${esc(v.name)}${v.revisit?' <span title="you had seen this before" style="color:#6e6e86">↻</span>':''}</span>
+      <span class="mono" style="color:#6e6e86;font-size:11px;width:36px;flex-shrink:0">${Number.isFinite(v.filmYear)?v.filmYear:'—'}</span>
+      <span class="mono" style="color:#c8a840;font-size:11px;width:52px;text-align:right;flex-shrink:0">${v.rating>0?histStars(v.rating):'<span style="color:#5e5e76">—</span>'}</span>
+    </div>`).join('')}`;
+  openModalEl('hist-modal');
+}
+function closeHistModal(){ closeModalEl('hist-modal'); }
 
 function histYearSection(y,idx,earliest){
   const hrs=Math.floor(y.minutes/60);
@@ -1796,10 +1949,12 @@ function histYearSection(y,idx,earliest){
       ${histTrendRows(y.decades,k=>k+'s')}</div>`:''
   ].filter(Boolean).join('');
 
-  return `<section style="margin-bottom:44px">
+  const p=y.pace;
+  return `<section id="hist-y${y.year}" style="margin-bottom:44px;scroll-margin-top:80px">
     <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;border-bottom:1px solid #1a1a2e;padding-bottom:12px;margin-bottom:20px">
       <h3 class="mono" style="font-size:34px;font-weight:bold;color:#f0e8d8;letter-spacing:-1px;line-height:1">${y.year}</h3>
       <div style="color:#8c8ca2;font-size:12px">${y.viewings} viewing${y.viewings!==1?'s':''} · ${y.films} film${y.films!==1?'s':''}</div>
+      ${p?`<div style="color:#998870;font-size:11px;border:1px solid #33291a;background:#181206;border-radius:100px;padding:3px 10px">still running — through ${histDate(p.through)}, on pace for about ${p.projected}</div>`:''}
     </div>
 
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:24px">
@@ -1807,13 +1962,32 @@ function histYearSection(y,idx,earliest){
       ${histTile(y.avgRating!=null?'★'+y.avgRating.toFixed(2):'—','Average rating',y.ratedCount<y.viewings?`${y.ratedCount} of ${y.viewings} rated`:'every viewing rated')}
       ${histTile(hrs?hrs+'h':'—','At the screen',rtNote)}
       ${histTile(MONTHS[y.peakMonth],'Busiest month',`${y.peakCount} viewing${y.peakCount!==1?'s':''}`)}
+      ${histTile(fmtAge(y.medianAge),'Median film age',y.newShare!=null?`${Math.round(y.newShare*100)}% were new releases`:'')}
     </div>
 
-    <div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:26px">
-      <div style="flex:1;min-width:280px;max-width:460px">
-        ${histSubhead('By month','')}
-        ${histMonthStrip(y.byMonth,'#c8a840')}
+    <div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:22px">
+      <div style="flex:1;min-width:270px">
+        ${histSubhead('By month','click a bar for the films')}
+        ${histMonthStrip(y.byMonth,'#c8a840',y.year)}
       </div>
+      <div style="flex:1;min-width:230px">
+        ${histSubhead('By night of the week','')}
+        ${histDowStrip(y.byDow,'#c8a840',y.year)}
+        ${(c=>c?`<div style="color:#6e6e86;font-size:11px;margin-top:9px">${c.clear
+          ? `Most often a <span style="color:#c8c0ae">${DOW_LONG[c.i]}</span> — ${c.n} viewing${c.n!==1?'s':''}`
+          : `No night stands out — ${y.year} spread fairly evenly across the week`}</div>`:'')(dowClaim(y.byDow))}
+      </div>
+    </div>
+
+    <div style="margin-bottom:26px">
+      ${histSubhead('Cadence','')}
+      ${histChips([
+        {v:y.activeDays,l:'days with a film',t:'distinct days you logged something'},
+        y.doubles||y.triples?{v:y.doubles+y.triples,l:'double bills',t:`${y.doubles} day${y.doubles!==1?'s':''} with two films${y.triples?`, ${y.triples} with three or more`:''}`}:null,
+        y.streak>1?{v:y.streak+' days',l:'longest streak',t:'ending '+y.streakEnd}:null,
+        y.gap>1?{v:y.gap+' days',l:'longest gap',t:y.gapFrom+' to '+y.gapTo}:null
+      ])}
+      ${y.biggestDays.length?`<div style="color:#6e6e86;font-size:11px;margin-top:10px">Fullest day${y.biggestDays.length>1?'s':''}: ${y.biggestDays.map(d=>`<span style="color:#c8c0ae">${histDate(d.date)}</span> (${d.n})`).join(' · ')}</div>`:''}
     </div>
 
     <div style="margin-bottom:26px">
@@ -1822,6 +1996,22 @@ function histYearSection(y,idx,earliest){
         ? `<div style="display:flex;gap:12px;flex-wrap:wrap">${y.top4.map(histFilmCard).join('')}</div>`
         : `<div style="color:#7d7d94;font-size:13px;padding:6px 0">Every film you logged this year was one you had already seen.</div>`}
     </div>
+
+    ${y.ratedCount?`<div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:26px">
+      <div style="flex:1;min-width:270px">
+        ${histSubhead('How you rated','click a bar for the films')}
+        ${histRatingBars(y.ratingHist,'#c8a840',y.year)}
+        <div style="color:#6e6e86;font-size:11px;margin-top:9px">
+          ${y.spread!=null?`Spread ±${y.spread.toFixed(2)} · `:''}${y.highRated} at ★4½ or better${y.ratedCount?` (${Math.round(y.highRated/y.ratedCount*100)}% of what you rated)`:''}
+        </div>
+      </div>
+      ${y.crowd?`<div style="flex:1;min-width:230px">
+        ${histSubhead('Against the crowd','your rating vs the average')}
+        <div class="mono" style="color:#c8a840;font-size:26px;font-weight:bold;line-height:1.1">${y.crowd.signed>=0?'+':'−'}${Math.abs(y.crowd.signed).toFixed(2)}</div>
+        <div style="color:#c8c0ae;font-size:12px;margin-top:4px">stars ${y.crowd.signed>=0?'above':'below'} consensus</div>
+        <div style="color:#7d7d94;font-size:11px;margin-top:2px">${y.crowd.agree}% agreement across ${y.crowd.n} rated film${y.crowd.n!==1?'s':''}</div>
+      </div>`:''}
+    </div>`:''}
 
     ${trends?`<div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:26px">${trends}</div>`:''}
 
@@ -1857,6 +2047,12 @@ function renderHistoryPanel(){
     ? `Your upload holds ${h.libraryFilms} films in total; the ${h.films} below are the ones with a diary entry, so anything you logged without a date sits out of these numbers.`
     : '';
   const rtNote=h.runtimeKnown<h.views?` — from the ${h.runtimeKnown} of ${h.views} viewings with a known runtime`:'';
+  const running=h.years.find(y=>y.pace);
+  const ageYears=[...h.years].sort((a,b)=>a.year-b.year).filter(y=>y.medianAge!=null);
+  // The shift is only a shift if there is an earlier year to have shifted from.
+  const ageShift=ageYears.length>1?{from:ageYears[0],to:ageYears[ageYears.length-1]}:null;
+  const repeats=(h.repeats||[]).slice(0,HIST_REPEATS_SHOWN);
+  const moved=(h.repeats||[]).filter(f=>f.change).length;
 
   el.innerHTML=`
     <span class="eyebrow">Watch History</span>
@@ -1873,20 +2069,63 @@ function renderHistoryPanel(){
         ${histTile(h.avgRating!=null?'★'+h.avgRating.toFixed(2):'—','Average rating',`${h.ratedCount} rated`)}
         ${histTile(hrs?hrs.toLocaleString()+'h':'—','Time at the screen',hrs?`about ${days.toFixed(1)} days`:'')}
         ${histTile(h.years.length,'Year'+(h.years.length!==1?'s':'')+' logged',span)}
+        ${histTile(fmtAge(h.medianAge),'Median film age',h.newShare!=null?`${Math.round(h.newShare*100)}% new releases`:'')}
       </div>
-      <div style="display:flex;gap:30px;flex-wrap:wrap">
+      <div style="display:flex;gap:30px;flex-wrap:wrap;margin-bottom:22px">
         <div style="flex:1;min-width:250px">
           ${histSubhead('Viewings per year','bar, then your average rating')}
           ${histYearBars([...h.years].sort((a,b)=>a.year-b.year))}
+          ${running?`<div style="color:#998870;font-size:11px;margin-top:8px;line-height:1.6">${running.year} is still running — it holds ${running.viewings} through ${histDate(running.pace.through)}, so it is being read against finished years. The hatched bar is where its current rate lands by December: about <span style="color:#c8c0ae">${running.pace.projected}</span>.</div>`:''}
         </div>
         <div style="flex:1;min-width:250px">
-          ${histSubhead('Every month, all years','')}
-          ${histMonthStrip(h.byMonth,'#c8a840')}
+          ${histSubhead('Every month, all years','click a bar for the films')}
+          ${histMonthStrip(h.byMonth,'#c8a840',0)}
           <div style="color:#6e6e86;font-size:11px;margin-top:10px">Busiest overall: <span style="color:#c8c0ae">${MONTHS_LONG[h.byMonth.indexOf(Math.max(...h.byMonth))]}</span></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:30px;flex-wrap:wrap;border-top:1px solid #16162a;padding-top:20px">
+        <div style="flex:1;min-width:230px;max-width:330px">
+          ${histSubhead('Which night','')}
+          ${histDowStrip(h.byDow,'#c8a840',0)}
+          ${(c=>c?`<div style="color:#6e6e86;font-size:11px;margin-top:10px">${c.clear
+            ? `Your night is <span style="color:#c8c0ae">${DOW_LONG[c.i]}</span> — ${c.n} of ${h.views} viewings`
+            : `No night stands out — your viewing spreads fairly evenly across the week`}</div>`:'')(dowClaim(h.byDow))}
+        </div>
+        <div style="flex:1;min-width:250px">
+          ${histSubhead('Cadence','')}
+          ${histChips([
+            {v:h.activeDays,l:'days with a film',t:'distinct days across the whole diary'},
+            h.doubles||h.triples?{v:h.doubles+h.triples,l:'double bills',t:`${h.doubles} day${h.doubles!==1?'s':''} with two films${h.triples?`, ${h.triples} with three or more`:''}`}:null,
+            h.streak>1?{v:h.streak+' days',l:'longest streak',t:'ending '+h.streakEnd}:null,
+            h.gap>1?{v:h.gap+' days',l:'longest gap',t:h.gapFrom+' to '+h.gapTo}:null
+          ])}
         </div>
       </div>
       ${rtNote?`<div style="color:#6e6e86;font-size:11px;margin-top:16px;border-top:1px solid #16162a;padding-top:12px">Hours are estimated${rtNote}.</div>`:''}
     </div>
+
+    ${ageYears.length?`<div style="display:flex;gap:30px;flex-wrap:wrap;margin-bottom:34px">
+      <div style="flex:1;min-width:280px">
+        ${histSubhead('The age of what you watch','median age of the film, then the share released that year')}
+        ${histAgeBars(ageYears)}
+        ${ageShift&&Math.abs((ageShift.to.medianAge||0)-(ageShift.from.medianAge||0))>=2
+          ? `<div style="color:#6e6e86;font-size:11px;margin-top:8px;line-height:1.6">In ${ageShift.from.year} the middle film you watched was <span style="color:#c8c0ae">${fmtAge(ageShift.from.medianAge)}</span> old; in ${ageShift.to.year} it is <span style="color:#c8c0ae">${fmtAge(ageShift.to.medianAge)}</span>. ${(ageShift.to.medianAge>ageShift.from.medianAge)?'You have been going backwards through the catalogue.':'You have been keeping closer to release.'}</div>`
+          : ''}
+      </div>
+      ${h.ratedCount?`<div style="flex:1;min-width:280px">
+        ${histSubhead('How you rate, all years','click a bar for the films')}
+        ${histRatingBars(h.ratingHist,'#c8a840',0)}
+        <div style="color:#6e6e86;font-size:11px;margin-top:10px;line-height:1.6">
+          ${h.spread!=null?`Ratings sit ±${h.spread.toFixed(2)} around your ★${h.avgRating.toFixed(2)} average. `:''}${h.crowd?`Against the crowd you run <span style="color:#c8c0ae">${h.crowd.signed>=0?'+':'−'}${Math.abs(h.crowd.signed).toFixed(2)}</span> stars, ${h.crowd.agree}% agreement over ${h.crowd.n} films.`:''}
+        </div>
+      </div>`:''}
+    </div>`:''}
+
+    ${repeats.length?`<div style="margin-bottom:34px">
+      ${histSubhead('Films you return to',`${h.repeats.length} film${h.repeats.length!==1?'s':''} logged more than once${moved?` — ${moved} changed your mind`:''}`)}
+      ${histRepeatRows(repeats)}
+      ${h.repeats.length>repeats.length?`<div style="color:#6e6e86;font-size:11px;margin-top:10px">and ${h.repeats.length-repeats.length} more.</div>`:''}
+    </div>`:''}
 
     <div style="color:#6e6e86;font-size:11px;line-height:1.7;margin-bottom:22px;padding:10px 14px;background:#0b0b16;border-left:2px solid #252535;border-radius:0 6px 6px 0">
       In the trend bars below, the gold bar is that genre or era's share of the year and the pale tick is its share of your whole history — the gap between them is the ▲ points figure. ★ is what you rated them.
@@ -2024,6 +2263,12 @@ const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov
 const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const TREND_MIN = 3;      // viewings a genre/era needs before a share swing means anything
 const TREND_SHOWN = 5;    // movers listed per direction
+const SPREAD_MIN = 5;     // ratings needed before a spread figure means anything
+const CROWD_MIN  = 8;     // rated films with a crowd score needed to compare
+const PACE_MIN_DAYS = 21; // too early in a year to project a finish
+const HIST_REPEATS_SHOWN = 8;
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const DOW_LONG = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 // Count and rate a set of viewings by some attribute (genre, decade). Shares are
 // taken over the viewings that actually carry the attribute, so films the lookup
@@ -2061,6 +2306,110 @@ function moversAgainst(yearProf, allProf){
   return out.sort((a,b)=>b.delta-a.delta);
 }
 
+// ── Rhythm, age, spread ──────────────────────────────────────────────────────
+// Diary dates are bare YYYY-MM-DD with no zone. Parsing them as UTC keeps the
+// weekday and the day arithmetic identical wherever the page is opened from —
+// read as local time, a midnight date west of Greenwich slides to the day before.
+function dowOf(date){ return new Date(date+'T00:00:00Z').getUTCDay(); }
+function dayNum(date){ return Math.round(Date.parse(date+'T00:00:00Z')/86400000); }
+
+function median(nums){
+  if(!nums.length) return null;
+  const a=[...nums].sort((x,y)=>x-y), m=a.length>>1;
+  return a.length%2?a[m]:(a[m-1]+a[m])/2;
+}
+
+// Longest run of consecutive days with a film, and the longest silence between
+// two. Both read off distinct days, so a double feature is still one day.
+function runsOf(dates){
+  const days=[...new Set(dates)].sort();
+  if(!days.length) return {streak:0,streakEnd:null,gap:0,gapFrom:null,gapTo:null};
+  let best=1,cur=1,bestEnd=days[0],gap=0,gapFrom=null,gapTo=null;
+  for(let i=1;i<days.length;i++){
+    const step=dayNum(days[i])-dayNum(days[i-1]);
+    if(step===1){ cur++; if(cur>best){ best=cur; bestEnd=days[i]; } }
+    else { cur=1; if(step>gap){ gap=step; gapFrom=days[i-1]; gapTo=days[i]; } }
+  }
+  return {streak:best,streakEnd:bestEnd,gap,gapFrom,gapTo};
+}
+
+// Days holding more than one film, and the fullest of them.
+function daysOf(rows){
+  const per={};
+  for(const v of rows) per[v.date]=(per[v.date]||0)+1;
+  const e=Object.entries(per);
+  return {active:e.length,
+    doubles:e.filter(([,n])=>n===2).length,
+    triples:e.filter(([,n])=>n>=3).length,
+    biggest:e.filter(([,n])=>n>=2).sort((a,b)=>(b[1]-a[1])||(a[0]<b[0]?1:-1))
+             .slice(0,3).map(([date,n])=>({date,n}))};
+}
+
+// Ten half-star buckets, ½ through 5. The average hides whether you use the
+// whole scale or park everything on 4 — this is the part that doesn't.
+function ratingHistOf(rows){
+  const h=new Array(10).fill(0);
+  for(const v of rows){
+    if(!(v.rating>0)) continue;
+    const i=Math.round(v.rating*2)-1;
+    if(i>=0&&i<10) h[i]++;
+  }
+  return h;
+}
+function spreadOf(rows){
+  const r=rows.filter(v=>v.rating>0).map(v=>v.rating);
+  if(r.length<SPREAD_MIN) return null;
+  const m=r.reduce((a,b)=>a+b,0)/r.length;
+  return Math.sqrt(r.reduce((s,x)=>s+(x-m)*(x-m),0)/r.length);
+}
+
+// Where a year sat against the crowd. The signed mean says which way you lean;
+// the mean absolute distance is how far from consensus you sit in either
+// direction — the same measure behind the taste badge, scored the same way.
+function crowdOf(rows){
+  const p=rows.filter(v=>v.rating>0&&v.voteAvg!=null&&v.voteAvg>0);
+  if(p.length<CROWD_MIN) return null;
+  const signed=p.reduce((s,v)=>s+(v.rating-v.voteAvg),0)/p.length;
+  const mad=p.reduce((s,v)=>s+Math.abs(v.rating-v.voteAvg),0)/p.length;
+  return {signed,mad,n:p.length,agree:Math.max(0,Math.min(100,Math.round((1-mad/2)*100)))};
+}
+
+// Films with more than one dated sitting. The count is the least of it — what
+// carries is whether the verdict moved, so ratings are kept per viewing and
+// only a film rated on two separate occasions can report a change.
+function repeatFilms(views){
+  const by={};
+  for(const v of views){ const k=v.name+'||'+v.filmYear; (by[k]||(by[k]=[])).push(v); }
+  const out=[];
+  for(const k in by){
+    const vs=by[k].slice().sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+    if(vs.length<2) continue;
+    const rated=vs.filter(v=>v.rating>0);
+    const first=rated.length?rated[0].rating:null;
+    const last=rated.length?rated[rated.length-1].rating:null;
+    out.push({name:vs[0].name, filmYear:vs[0].filmYear, director:vs[0].director,
+      count:vs.length, views:vs.map(v=>({date:v.date,rating:v.rating})),
+      first, last, change:rated.length>1?last-first:null,
+      lastDate:vs[vs.length-1].date});
+  }
+  return out.sort((a,b)=>(b.count-a.count)||(a.lastDate<b.lastDate?1:-1));
+}
+
+// A year still running is being ranked against finished ones, so the section has
+// to say so. The finish is projected at the rate observed so far, measured to the
+// last logged day rather than to today — a month-old export is a stale export,
+// not a slump, and dividing by today's date would invent one.
+function paceOf(year, rows){
+  if(year!==new Date().getFullYear()) return null;
+  let last=rows[0].date;
+  for(const v of rows) if(v.date>last) last=v.date;
+  const start=dayNum(year+'-01-01');
+  const elapsed=dayNum(last)-start+1, total=dayNum((year+1)+'-01-01')-start;
+  if(elapsed<PACE_MIN_DAYS||elapsed>=total) return null;
+  return {through:last, elapsed, total, pct:elapsed/total,
+    projected:Math.round(rows.length/elapsed*total)};
+}
+
 function computeHistory(){
   const diary=STATE._diary||[];
   if(!diary.length) return null;
@@ -2093,7 +2442,12 @@ function computeHistory(){
       director:(d&&d.director)||null,
       genres:(d&&d.genres)||[],
       runtime:(d&&Number.isFinite(d.runtime)&&d.runtime>0)?d.runtime:0,
-      decade:Number.isFinite(v.year)?Math.floor(v.year/10)*10:null};
+      voteAvg:(d&&d.voteAvg!=null&&d.voteAvg>0)?d.voteAvg:null,
+      decade:Number.isFinite(v.year)?Math.floor(v.year/10)*10:null,
+      dow:dowOf(v.date),
+      // How old the film was on the night — the number behind "you've turned
+      // to the back catalogue". Negative for a festival run seen before release.
+      age:Number.isFinite(v.year)?(+v.date.slice(0,4))-v.year:null};
   });
 
   const genresOf=v=>v.genres, decadeOf=v=>v.decade==null?[]:[v.decade];
@@ -2142,10 +2496,14 @@ function computeHistory(){
 
   const years=Object.keys(byYear).map(Number).sort((a,b)=>b-a).map(y=>{
     const rows=byYear[y];
-    const byMonth=new Array(12).fill(0);
-    for(const v of rows) byMonth[v.mo]++;
+    const byMonth=new Array(12).fill(0), byDow=new Array(7).fill(0);
+    for(const v of rows){ byMonth[v.mo]++; byDow[v.dow]++; }
     const peak=byMonth.indexOf(Math.max(...byMonth));
+    const peakDow=byDow.indexOf(Math.max(...byDow));
     const rated=rows.filter(v=>v.rating>0);
+    const ages=rows.map(v=>v.age).filter(a=>Number.isFinite(a));
+    const newRel=ages.filter(a=>a<=0).length;
+    const dayInfo=daysOf(rows), runs=runsOf(rows.map(v=>v.date));
     const gm=moversAgainst(profileBy(rows,genresOf),allGenre);
     const dm=moversAgainst(profileBy(rows,decadeOf),allDecade);
 
@@ -2164,6 +2522,16 @@ function computeHistory(){
 
     return {year:y, viewings:rows.length,
       films:new Set(rows.map(v=>v.name+'||'+v.filmYear)).size,
+      byDow, peakDow, peakDowCount:byDow[peakDow],
+      medianAge:median(ages), ageKnown:ages.length,
+      newReleases:newRel, newShare:ages.length?newRel/ages.length:null,
+      activeDays:dayInfo.active, doubles:dayInfo.doubles, triples:dayInfo.triples,
+      biggestDays:dayInfo.biggest,
+      streak:runs.streak, streakEnd:runs.streakEnd,
+      gap:runs.gap, gapFrom:runs.gapFrom, gapTo:runs.gapTo,
+      ratingHist:ratingHistOf(rows), spread:spreadOf(rows),
+      highRated:rows.filter(v=>v.rating>=4.5).length,
+      crowd:crowdOf(rows), pace:paceOf(y,rows),
       firstTime:rows.filter(v=>!v.revisit).length,
       revisits:rows.filter(v=>v.revisit).length,
       taggedRewatch:rows.filter(v=>v.rewatch).length,
@@ -2178,9 +2546,22 @@ function computeHistory(){
       discovered};
   });
 
-  const allMonths=new Array(12).fill(0);
-  for(const v of views) allMonths[v.mo]++;
+  const allMonths=new Array(12).fill(0), allDow=new Array(7).fill(0);
+  for(const v of views){ allMonths[v.mo]++; allDow[v.dow]++; }
+  const allAges=views.map(v=>v.age).filter(a=>Number.isFinite(a));
+  const allDays=daysOf(views), allRuns=runsOf(views.map(v=>v.date));
   return {years, views:views.length,
+    // The full viewing list, kept so a click on any bar can name the films
+    // behind it rather than leaving the reader with a number.
+    rows:views,
+    byDow:allDow, peakDow:allDow.indexOf(Math.max(...allDow)),
+    medianAge:median(allAges), ageKnown:allAges.length,
+    newShare:allAges.length?allAges.filter(a=>a<=0).length/allAges.length:null,
+    activeDays:allDays.active, doubles:allDays.doubles, triples:allDays.triples,
+    streak:allRuns.streak, streakEnd:allRuns.streakEnd,
+    gap:allRuns.gap, gapFrom:allRuns.gapFrom, gapTo:allRuns.gapTo,
+    ratingHist:ratingHistOf(views), spread:spreadOf(views), crowd:crowdOf(views),
+    repeats:repeatFilms(views),
     films:new Set(views.map(v=>v.name+'||'+v.filmYear)).size,
     avgRating:avgOf(views), ratedCount:views.filter(v=>v.rating>0).length,
     minutes:views.reduce((a,v)=>a+v.runtime,0),
@@ -2290,8 +2671,10 @@ function closeModalEl(id){
 }
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape') return;
+  const l=document.getElementById('hist-modal');
   const f=document.getElementById('filmog-modal'), h=document.getElementById('how-modal');
-  if(f&&f.classList.contains('open')) closeFilmogModal();
+  if(l&&l.classList.contains('open')) closeHistModal();
+  else if(f&&f.classList.contains('open')) closeFilmogModal();
   else if(h&&h.classList.contains('open')) closeModal();
 });
 
@@ -2561,6 +2944,13 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
   <div class="modal-box" role="dialog" aria-modal="true" aria-label="Director filmography">
     <button class="modal-close" onclick="closeFilmogModal()" aria-label="Close">✕</button>
     <div id="filmog-modal-body"></div>
+  </div>
+</div>
+
+<div id="hist-modal" class="modal-bg" onclick="if(event.target===this)closeHistModal()">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-label="Viewings">
+    <button class="modal-close" onclick="closeHistModal()" aria-label="Close">✕</button>
+    <div id="hist-modal-body"></div>
   </div>
 </div>
 
