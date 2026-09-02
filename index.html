@@ -395,7 +395,7 @@ const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
   runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0,
   _activeGenre:null, _filmog:{}, recMode:'balanced',
-  _diary:[], _history:null };
+  _diary:[], _history:null, _ratedOn:{} };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -495,6 +495,40 @@ function parseDiaryCSV(text){
       rewatch:rewatchI>=0&&(c[rewatchI]||'').toLowerCase().trim()==='yes',
       date});
   }
+  return out;
+}
+
+// ratings.csv records the day each rating was logged. That date is worthless as
+// a watch date — a backlog import stamps hundreds of films with one day, which is
+// why the timeline ignores the file — but it is exactly the right signal for "had
+// you already seen this?". Letterboxd only flags a diary entry as a rewatch when
+// you remember to tick the box, so a film you rated years ago and revisited this
+// year often arrives looking brand new. A rating that predates the viewing settles it.
+function parseRatingDates(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(!rows.length) return {};
+  const header=rows[0].map(h=>h.toLowerCase().trim());
+  const gi=k=>header.findIndex(h=>h===k);
+  if(gi('watched date')>=0) return {};   // a diary export's Date means something else
+  const nameI=gi('name'), yearI=gi('year'), dateI=gi('date'), ratingI=gi('rating');
+  if(nameI<0||yearI<0||dateI<0||ratingI<0) return {};
+  const out={};
+  for(let i=1;i<rows.length;i++){
+    const c=rows[i];
+    const name=(c[nameI]||'').trim(), date=(c[dateI]||'').trim();
+    if(!name||!DIARY_DATE_RE.test(date)) continue;
+    if(!(parseFloat(c[ratingI])>0)) continue;
+    const year=parseInt(c[yearI],10);
+    const k=name+'||'+(Number.isFinite(year)?year:null);   // same key shape the diary uses
+    if(!out[k]||date<out[k]) out[k]=date;                  // earliest rating wins
+  }
+  return out;
+}
+
+function sanitizeRatedOn(raw){
+  const out={};
+  if(!raw||typeof raw!=='object') return out;
+  for(const k in raw){ const v=raw[k]; if(typeof v==='string'&&DIARY_DATE_RE.test(v)) out[k]=v; }
   return out;
 }
 
@@ -707,7 +741,7 @@ function handleFileInput(files){
         STATE.userName=d.userName||'';
         STATE.genres=d.genres||[];
         // Pre-v7 files carry no diary; the history tab simply stays hidden.
-        STATE._diary=sanitizeDiary(d.diary); STATE._history=null;
+        STATE._diary=sanitizeDiary(d.diary); STATE._ratedOn=sanitizeRatedOn(d.ratedOn); STATE._history=null;
         // Merge exact filmographies from the file over what this browser cached.
         // Pre-v6 files used a different entry shape; drop those rather than import
         // them garbled — they can be re-fetched from TMDB.
@@ -769,13 +803,15 @@ async function startAnalysis(){
   document.getElementById('proc-title').textContent=STATE.userName?`Sculpting ${STATE.userName}'s mountain…`:'Sculpting your mountain…';
   showPage('page-processing');
   try{
-    let allRaw=[], diary=[];
+    let allRaw=[], diary=[], ratedOn={};
     for(const file of STATE.selectedFiles){
       const text=await file.text();
       allRaw=allRaw.concat(parseLetterboxdCSV(text));
       diary=diary.concat(parseDiaryCSV(text));   // same text, second pass — keeps the dates
+      const rd=parseRatingDates(text);
+      for(const k in rd) if(!ratedOn[k]||rd[k]<ratedOn[k]) ratedOn[k]=rd[k];
     }
-    STATE._diary=dedupeDiary(diary); STATE._history=null;
+    STATE._diary=dedupeDiary(diary); STATE._ratedOn=ratedOn; STATE._history=null;
     if(STATE.runId!==thisRunId) return;
     if(!allRaw.length) throw new Error('No films found.');
     const films=consolidateFilms(allRaw);
@@ -815,12 +851,13 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._diary=[];STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
   const payload={
-    version:7,   // 7 = carries dated diary viewings for the history page
+    version:8,   // 8 = adds rating dates, which mark a film as already seen
+                 // 7 = carries dated diary viewings for the history page
                  // 6 = filmog entries are [title, year, runtime, voteAvg, genres]
     userName:STATE.userName,
     exportedAt:new Date().toISOString(),
@@ -838,7 +875,9 @@ function exportCache(){
     filmData:STATE._filmData||null,
     films:STATE._films||null,
     // Dated viewings — the only source the history page will read
-    diary:STATE._diary||[]
+    diary:STATE._diary||[],
+    // name||year -> earliest rating date, so revisits stay out of the top four
+    ratedOn:STATE._ratedOn||{}
   };
   const data=JSON.stringify(payload,null,2);
   triggerDownload((STATE.userName||'my')+'-rushmore-data.json','application/json',data);
@@ -1704,7 +1743,7 @@ function histFilmCard(v,i){
     <div style="color:#83839b;font-size:11px;margin-bottom:8px">${Number.isFinite(v.filmYear)?v.filmYear:'—'}</div>
     ${v.director?`<div style="color:#c8c0ae;font-size:12px">${esc(v.director)}</div>`:'<div style="color:#5e5e76;font-size:12px">Director unknown</div>'}
     ${g?`<div style="color:#7d7d94;font-size:11px;margin-top:3px">${esc(g)}</div>`:''}
-    <div style="color:#6e6e86;font-size:10px;margin-top:10px;border-top:1px solid #14141f;padding-top:7px">Watched ${histDate(v.date)}${v.rewatch?' · ↻ rewatch':''}</div>
+    <div style="color:#6e6e86;font-size:10px;margin-top:10px;border-top:1px solid #14141f;padding-top:7px">Watched ${histDate(v.date)}</div>
   </div>`;
 }
 
@@ -1730,7 +1769,7 @@ function histYearSection(y,idx,earliest){
     </div>
 
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:24px">
-      ${histTile(y.viewings,'Viewings',`${y.firstTime} first-time · ${y.rewatches} rewatch${y.rewatches!==1?'es':''}`)}
+      ${histTile(y.viewings,'Viewings',`${y.firstTime} first-time · ${y.revisits} revisit${y.revisits!==1?'s':''}`)}
       ${histTile(y.avgRating!=null?'★'+y.avgRating.toFixed(2):'—','Average rating',y.ratedCount<y.viewings?`${y.ratedCount} of ${y.viewings} rated`:'every viewing rated')}
       ${histTile(hrs?hrs+'h':'—','At the screen',rtNote)}
       ${histTile(MONTHS[y.peakMonth],'Busiest month',`${y.peakCount} viewing${y.peakCount!==1?'s':''}`)}
@@ -1744,8 +1783,10 @@ function histYearSection(y,idx,earliest){
     </div>
 
     <div style="margin-bottom:26px">
-      ${histSubhead(`Your top four of ${y.year}`,'ranked by your rating')}
-      <div style="display:flex;gap:12px;flex-wrap:wrap">${y.top4.map(histFilmCard).join('')}</div>
+      ${histSubhead(`Your top four of ${y.year}`,`first-time watches, ranked by your rating${y.revisits?` — ${y.revisits} revisit${y.revisits!==1?'s':''} set aside`:''}`)}
+      ${y.top4.length
+        ? `<div style="display:flex;gap:12px;flex-wrap:wrap">${y.top4.map(histFilmCard).join('')}</div>`
+        : `<div style="color:#7d7d94;font-size:13px;padding:6px 0">Every film you logged this year was one you had already seen.</div>`}
     </div>
 
     ${trends?`<div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:26px">${trends}</div>`:''}
@@ -1787,7 +1828,8 @@ function renderHistoryPanel(){
     <span class="eyebrow">Watch History</span>
     <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:28px;color:#f0e8d8;font-weight:700;margin-bottom:8px">Your years in film</h2>
     <div style="color:#8c8ca2;font-size:13px;line-height:1.7;margin-bottom:26px;max-width:640px">
-      Built from the dated entries in your diary${span?`, ${span}`:''}. Every sitting counts, so a rewatch adds to its year.
+      Built from the dated entries in your diary${span?`, ${span}`:''}. Every sitting counts, so a revisit adds to its year's totals, average and trends.
+      Only the top four is limited to first-time watches — a film counts as a revisit if you ticked rewatch, logged it earlier, or had already rated it.
       ${gap?`<br/><span style="color:#998870">${gap}</span>`:''}
     </div>
 
@@ -1989,12 +2031,30 @@ function computeHistory(){
   const diary=STATE._diary||[];
   if(!diary.length) return null;
   const fd=STATE._filmData||{};
+  const ratedOn=STATE._ratedOn||{};
+
+  // Was the film already familiar when you sat down? Three independent tells,
+  // because no single one is reliable on its own:
+  //   1. Letterboxd's own rewatch tick — accurate when set, often forgotten;
+  //   2. an earlier diary entry for the same film;
+  //   3. a rating logged before this date, which is how a backlog-rated
+  //      favourite gives itself away even with the tick left blank.
+  const firstView={};
+  for(const v of diary){
+    const k=v.name+'||'+v.year;
+    if(!firstView[k]||v.date<firstView[k]) firstView[k]=v.date;
+  }
+  const isRevisit=(v,key)=>!!(v.rewatch
+    || (firstView[key]&&firstView[key]<v.date)
+    || (ratedOn[key]&&ratedOn[key]<v.date));
 
   // Attach crew, genre and era to every viewing. A film the lookup missed still
   // counts toward the year's volume — it just sits out the trend sections.
   const views=diary.map(v=>{
-    const d=fd[v.name+'||'+v.year]||null;
+    const key=v.name+'||'+v.year;
+    const d=fd[key]||null;
     return {name:v.name, filmYear:v.year, rating:v.rating, rewatch:v.rewatch, date:v.date,
+      revisit:isRevisit(v,key),
       y:+v.date.slice(0,4), mo:+v.date.slice(5,7)-1,
       director:(d&&d.director)||null,
       genres:(d&&d.genres)||[],
@@ -2008,21 +2068,32 @@ function computeHistory(){
 
   // Earliest diary viewing per director. "New" means new to the diary — if you
   // logged a backlog without dates, this can't know you'd seen them before.
-  const firstSeen={}, byDirector={};
+  const firstSeen={}, byDirector={}, firstWasNew={};
   for(const v of views){
     if(!v.director) continue;
-    if(!firstSeen[v.director]||v.date<firstSeen[v.director]) firstSeen[v.director]=v.date;
+    if(!firstSeen[v.director]||v.date<firstSeen[v.director]){
+      firstSeen[v.director]=v.date;
+      // If the earliest entry we hold is itself a revisit, you knew this director
+      // before the diary did, so the year can't claim to have found them.
+      firstWasNew[v.director]=!v.revisit;
+    }
     (byDirector[v.director]||(byDirector[v.director]=[])).push(v);
   }
 
   // Rank a year's films: your rating first, then how highly that director scores
   // on your own Rushmore, then whichever you saw first. One slot per film, so a
-  // film you rewatched twice can't take two places in a top four.
+  // film you watched twice can't take two places in a top four.
+  //
+  // Revisits are excluded. The top four reads as "what you discovered this year",
+  // and a five-star rewatch of The Godfather would otherwise crowd out every new
+  // film — a favourite you already knew about isn't a discovery. Revisits still
+  // count everywhere else: the totals, the average, the hours, the trends.
   const dirScore={};
   (STATE.directors||[]).forEach(d=>{ dirScore[d.name]=d.score||0; });
   const pickTop=rows=>{
     const best={};
     for(const v of rows){
+      if(v.revisit) continue;
       const k=v.name+'||'+v.filmYear;
       if(!best[k]||v.rating>best[k].rating) best[k]=v;
     }
@@ -2047,7 +2118,7 @@ function computeHistory(){
     // Directors whose first diary entry landed this year, ranked by how much of
     // them you went on to watch. A single film only counts as a discovery worth
     // naming if you rated it highly — otherwise it's just a film you saw once.
-    const discovered=Object.keys(firstSeen).filter(n=>+firstSeen[n].slice(0,4)===y)
+    const discovered=Object.keys(firstSeen).filter(n=>+firstSeen[n].slice(0,4)===y&&firstWasNew[n])
       .map(n=>{
         const all=byDirector[n];
         const first=all.reduce((a,b)=>a.date<=b.date?a:b);
@@ -2059,8 +2130,9 @@ function computeHistory(){
 
     return {year:y, viewings:rows.length,
       films:new Set(rows.map(v=>v.name+'||'+v.filmYear)).size,
-      firstTime:rows.filter(v=>!v.rewatch).length,
-      rewatches:rows.filter(v=>v.rewatch).length,
+      firstTime:rows.filter(v=>!v.revisit).length,
+      revisits:rows.filter(v=>v.revisit).length,
+      taggedRewatch:rows.filter(v=>v.rewatch).length,
       avgRating:avgOf(rows), ratedCount:rated.length,
       minutes:rows.reduce((a,v)=>a+v.runtime,0),
       runtimeKnown:rows.filter(v=>v.runtime>0).length,
