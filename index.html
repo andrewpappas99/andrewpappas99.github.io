@@ -37,6 +37,7 @@ input,select,button{font-family:inherit}
 #file-input:focus-visible+.drop-zone{border-color:#c8a840;box-shadow:0 0 0 3px #c8a84033}
 .nav{background:#06060f;border-bottom:1px solid #151525;position:sticky;top:0;z-index:100}
 .nav-inner{display:flex;align-items:center;gap:10px;height:54px;flex-wrap:wrap;padding:0 20px;max-width:980px;margin:0 auto}
+.nav-tabs{display:flex;gap:2px;flex-wrap:wrap}
 .nav-tab{background:none;border:none;border-bottom:2px solid transparent;color:#9595aa;padding:6px 14px;border-radius:0;cursor:pointer;font-size:12px;transition:all .15s;white-space:nowrap;letter-spacing:.3px}
 .nav-tab.active{color:#c8a840;border-bottom-color:#c8a840}
 .nav-tab:hover:not(.active){color:#b2b2c4}
@@ -198,11 +199,12 @@ input,select,button{font-family:inherit}
         <div id="nav-title" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#c8a840">My Mount Rushmore</div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:#777787;text-transform:uppercase;margin-top:1px">of Cinema</div>
       </div>
-      <div style="display:flex;gap:2px">
+      <div class="nav-tabs">
         <button class="nav-tab active" id="tab-btn-directors" onclick="switchCat('directors')">🎬 Directors</button>
         <button class="nav-tab" id="tab-btn-writers" onclick="switchCat('writers')">✍️ Writers</button>
         <button class="nav-tab" id="tab-btn-actors" onclick="switchCat('actors')">🎭 Actors</button>
         <button class="nav-tab" id="tab-btn-recs" onclick="switchCat('recs')">🍿 Watch Next</button>
+        <button class="nav-tab" id="tab-btn-history" onclick="switchCat('history')">🗓 History</button>
       </div>
       <div style="flex:1"></div>
       <div class="nav-actions" style="display:flex;gap:6px;flex-shrink:0;align-items:center">
@@ -283,6 +285,7 @@ input,select,button{font-family:inherit}
   <div id="cat-writers"   class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="cat-actors"    class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="cat-recs"      class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
+  <div id="cat-history"   class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
 </div>
 
 <script src="film-db.js"></script>
@@ -321,7 +324,7 @@ const RANK_COLORS = ['#ffd700','#d4d4d4','#cd7f32','#9999bb'];
 const CAT_LABELS  = { directors:'Directors', writers:'Writers', actors:'Actors' };
 const CAT_ICONS   = { directors:'🎬', writers:'✍️', actors:'🎭' };
 const CATS        = ['directors','writers','actors'];   // scored person categories
-const TABS        = [...CATS,'recs'];                   // + the recommendations panel
+const TABS        = [...CATS,'recs','history'];         // + recommendations and the diary timeline
 const TMDB_GENRES = {28:'Action',12:'Adventure',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',14:'Fantasy',36:'History',27:'Horror',10402:'Music',9648:'Mystery',10749:'Romance',878:'Sci-Fi',53:'Thriller',10752:'War',37:'Western',10770:'TV Movie'};
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 // Same list build-db.js uses; hoisted so it isn't rebuilt on every film lookup
@@ -391,7 +394,8 @@ function lookupFuzzyFromDB(film){
 const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
   runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0,
-  _activeGenre:null, _filmog:{}, recMode:'balanced' };
+  _activeGenre:null, _filmog:{}, recMode:'balanced',
+  _diary:[], _history:null };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -461,6 +465,62 @@ function parseLetterboxdCSV(text){
     if(name&&year) films.push({name,year,rating,rewatch});
   }
   return films;
+}
+
+// The scoring pipeline throws dates away and collapses repeat viewings — right
+// for a Rushmore, useless for a history. This is the second pass over the same
+// text: one record per diary row, keyed on the real "Watched Date" column.
+//
+// ratings.csv is deliberately not accepted here even though it carries a Date.
+// That column is the day you *logged* the film, so an import backlog drops
+// hundreds of films onto one date and invents a viewing spike that never
+// happened. A history is only honest from the diary.
+const DIARY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function parseDiaryCSV(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(!rows.length) return [];
+  const header=rows[0].map(h=>h.toLowerCase().trim());
+  const gi=k=>header.findIndex(h=>h===k);
+  const nameI=gi('name'), yearI=gi('year'), dateI=gi('watched date');
+  if(nameI<0||yearI<0||dateI<0) return [];   // not a diary export — nothing to do
+  const ratingI=gi('rating'), rewatchI=gi('rewatch');
+  const out=[];
+  for(let i=1;i<rows.length;i++){
+    const c=rows[i];
+    const name=(c[nameI]||'').trim(), date=(c[dateI]||'').trim();
+    if(!name||!DIARY_DATE_RE.test(date)) continue;   // an undated row can't sit on a timeline
+    const year=parseInt(c[yearI],10);
+    out.push({name,year:Number.isFinite(year)?year:null,
+      rating:ratingI>=0?parseFloat(c[ratingI])||0:0,
+      rewatch:rewatchI>=0&&(c[rewatchI]||'').toLowerCase().trim()==='yes',
+      date});
+  }
+  return out;
+}
+
+// Uploading diary.csv twice, or a diary alongside an overlapping export, would
+// double every viewing — so collapse exact repeats of one film on one day.
+function dedupeDiary(rows){
+  const seen=new Set(), out=[];
+  for(const r of rows){
+    const k=r.date+'|'+r.name+'|'+r.year;
+    if(seen.has(k)) continue;
+    seen.add(k); out.push(r);
+  }
+  return out.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+}
+
+// Diary rows survive the Save Data round-trip, so validate them on the way back
+// in the same way share payloads are validated.
+function sanitizeDiary(raw){
+  if(!Array.isArray(raw)) return [];
+  const out=[];
+  for(const r of raw){
+    if(!r||typeof r.name!=='string'||!DIARY_DATE_RE.test(String(r.date||''))) continue;
+    out.push({name:r.name,year:Number.isFinite(r.year)?r.year:null,
+      rating:Number(r.rating)||0,rewatch:!!r.rewatch,date:r.date});
+  }
+  return dedupeDiary(out);
 }
 
 function consolidateFilms(rawFilms){
@@ -646,6 +706,8 @@ function handleFileInput(files){
         if(!d.version||!d.directors) throw new Error('Invalid cache file.');
         STATE.userName=d.userName||'';
         STATE.genres=d.genres||[];
+        // Pre-v7 files carry no diary; the history tab simply stays hidden.
+        STATE._diary=sanitizeDiary(d.diary); STATE._history=null;
         // Merge exact filmographies from the file over what this browser cached.
         // Pre-v6 files used a different entry shape; drop those rather than import
         // them garbled — they can be re-fetched from TMDB.
@@ -707,8 +769,13 @@ async function startAnalysis(){
   document.getElementById('proc-title').textContent=STATE.userName?`Sculpting ${STATE.userName}'s mountain…`:'Sculpting your mountain…';
   showPage('page-processing');
   try{
-    let allRaw=[];
-    for(const file of STATE.selectedFiles){ const text=await file.text(); allRaw=allRaw.concat(parseLetterboxdCSV(text)); }
+    let allRaw=[], diary=[];
+    for(const file of STATE.selectedFiles){
+      const text=await file.text();
+      allRaw=allRaw.concat(parseLetterboxdCSV(text));
+      diary=diary.concat(parseDiaryCSV(text));   // same text, second pass — keeps the dates
+    }
+    STATE._diary=dedupeDiary(diary); STATE._history=null;
     if(STATE.runId!==thisRunId) return;
     if(!allRaw.length) throw new Error('No films found.');
     const films=consolidateFilms(allRaw);
@@ -748,12 +815,13 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._diary=[];STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
   const payload={
-    version:6,   // 6 = filmog entries are [title, year, runtime, voteAvg, genres]
+    version:7,   // 7 = carries dated diary viewings for the history page
+                 // 6 = filmog entries are [title, year, runtime, voteAvg, genres]
     userName:STATE.userName,
     exportedAt:new Date().toISOString(),
     minFilms:MIN_FILMS,
@@ -768,7 +836,9 @@ function exportCache(){
     genres:STATE.genres||[],
     // Store raw lookup data so TOP_ACTORS slider works on reload
     filmData:STATE._filmData||null,
-    films:STATE._films||null
+    films:STATE._films||null,
+    // Dated viewings — the only source the history page will read
+    diary:STATE._diary||[]
   };
   const data=JSON.stringify(payload,null,2);
   triggerDownload((STATE.userName||'my')+'-rushmore-data.json','application/json',data);
@@ -1171,6 +1241,27 @@ function dirByName(name){
   return _dirByName[name];
 }
 
+// ─── Time left in a filmography ───────────────────────────────────────────────
+// Runtime is missing for a slice of both tiers — 4-field DBs predate the runtime
+// column, and TMDB reports 0 for some obscure credits. Dropping those entries
+// would quietly understate the total, so fill each with the mean of the runtimes
+// this director does report and mark the figure approximate.
+const TYPICAL_RUNTIME = 105;
+function hoursToComplete(cov){
+  const missing=(cov&&cov.missing)||[];
+  if(!missing.length) return null;
+  const known=missing.map(f=>f.rt).filter(rt=>Number.isFinite(rt)&&rt>0);
+  const sum=known.reduce((a,b)=>a+b,0);
+  const mean=known.length?sum/known.length:TYPICAL_RUNTIME;
+  const unknown=missing.length-known.length;
+  return {mins:Math.round(sum+unknown*mean),unknown,estMean:Math.round(mean),count:missing.length};
+}
+
+function fmtDuration(mins){
+  const h=Math.floor(mins/60), m=Math.round(mins%60);
+  return h?h+'h'+(m?' '+m+'m':''):m+' min';
+}
+
 function coverageInnerHTML(name,ac){
   const row=(right,pct)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;gap:8px">
       <span style="color:#8c8ca2;font-size:8px;letter-spacing:2px;text-transform:uppercase">Filmography</span>
@@ -1212,6 +1303,13 @@ function renderFilmogModal(){
       <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(title)}</span>${right||''}</div>`;
 
   const missing=[...cov.missing].sort((a,b)=>a.y-b.y);
+  // Hours to completion: the headline number people actually plan around
+  const left=hoursToComplete(cov);
+  const timeLeft=left?`<span title="${esc(left.unknown
+      ? `${left.unknown} of ${left.count} unseen films list no runtime — estimated at ${left.estMean} min each.`
+      : `Total runtime of the ${left.count} film${left.count!==1?'s':''} you haven't seen.`)}"
+      style="background:#c8a84014;border:1px solid #c8a84033;color:#c8a840;border-radius:20px;padding:3px 11px;font-size:11px;white-space:nowrap;flex-shrink:0">
+      ${left.unknown?'≈ ':''}${fmtDuration(left.mins)} to complete</span>`:'';
   // seenList is the filtered set the percentage was actually computed from, so the
   // two sections below always add up to the fraction in the header
   const seenFilms=[...(cov.seenList||d.films||[])].sort((a,b)=>a.year-b.year);
@@ -1242,7 +1340,11 @@ function renderFilmogModal(){
       ${hasKey?'':`<div style="color:#8c8ca2;font-size:11px;margin-top:7px">Needs a free TMDB API key — add one under ⚙ API Key Setup on the upload screen.</div>`}
     </div>`}
     <div style="margin-bottom:22px">
-      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Not seen <span style="color:#8c8ca2">(${missing.length})</span></div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+        <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase">Not seen <span style="color:#8c8ca2">(${missing.length})</span></div>
+        <div style="flex:1"></div>
+        ${timeLeft}
+      </div>
       ${missing.length?missing.map(f=>row(f.y,f.title,'')).join(''):`<div style="color:#4a9a4a;font-size:13px">You've seen every film listed here.</div>`}
     </div>
     <div>
@@ -1506,6 +1608,13 @@ function renderResults(){
     if(STATE[cat].length) filterCat(cat);
   });
   renderRecsPanel();
+  renderHistoryPanel();
+  // The timeline is only meaningful with dated diary rows, so the tab hides
+  // itself rather than offering an empty page to ratings.csv-only uploads.
+  const hasDiary=(STATE._diary||[]).length>0;
+  document.getElementById('tab-btn-history').style.display=hasDiary?'':'none';
+  if(!hasDiary&&STATE.currentCat==='history') switchCat('directors');
+  applyHistoryChrome();
   renderGenreStrip();
   renderConformityStrip();
   // Data quality banners
@@ -1519,6 +1628,195 @@ function renderResults(){
   if(STATE._totalFilms>0) banners.push(STATE._matchedFilms+' / '+STATE._totalFilms+' films matched'+(STATE._dbMisses>0&&!getKey('tmdb')?' — '+STATE._dbMisses+' not found in the built-in database. Add a free <b>TMDB API key</b> in ⚙ to look them up live.':'.'));
   const el=document.getElementById('data-quality-banner');
   el.innerHTML=banners.map(b=>`<div style="background:#1a1410;border-left:3px solid #c8a840;padding:10px 20px;font-size:12px;color:#998870">${b}</div>`).join('');
+}
+
+// ─── History rendering ────────────────────────────────────────────────────────
+function histStars(r){ return r>0?'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':''):''; }
+function histDate(d){ return MONTHS[+d.slice(5,7)-1]+' '+(+d.slice(8,10)); }
+
+function histTile(value,label,sub){
+  return `<div style="flex:1;min-width:108px">
+    <div class="mono" style="color:#c8a840;font-size:26px;font-weight:bold;line-height:1.1">${value}</div>
+    <div style="color:#c8c0ae;font-size:12px;margin-top:4px">${label}</div>
+    ${sub?`<div style="color:#7d7d94;font-size:11px;margin-top:2px">${sub}</div>`:''}
+  </div>`;
+}
+
+function histSubhead(title,note){
+  return `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:10px">
+    <div style="color:#c8c0b0;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase">${title}</div>
+    ${note?`<div style="color:#7d7d94;font-size:11px">${note}</div>`:''}</div>`;
+}
+
+// Twelve buckets, scaled to the busiest one. Absolute counts would make a quiet
+// year invisible next to a loud one, and each strip is read on its own.
+function histMonthStrip(counts,accent){
+  const max=Math.max(1,...counts);
+  return `<div style="display:flex;gap:3px;align-items:flex-end;height:42px">${
+    counts.map((n,i)=>`<div title="${MONTHS_LONG[i]}: ${n} viewing${n!==1?'s':''}" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%">
+      <div style="height:${n?Math.max(3,Math.round(n/max*40)):2}px;background:${n?accent:'#16162a'};opacity:${n?(0.4+0.6*n/max).toFixed(2):1};border-radius:2px"></div></div>`).join('')}</div>
+    <div style="display:flex;gap:3px;margin-top:5px">${
+      MONTHS.map(m=>`<div style="flex:1;text-align:center;color:#6e6e86;font-size:9px">${m[0]}</div>`).join('')}</div>`;
+}
+
+function histYearBars(years){
+  const max=Math.max(1,...years.map(y=>y.viewings));
+  return years.map(y=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+    <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${y.year}</span>
+    <div style="flex:1;background:#0e0e1c;border-radius:100px;height:10px;overflow:hidden;min-width:60px">
+      <div style="width:${Math.round(y.viewings/max*100)}%;height:100%;background:linear-gradient(90deg,#6a5010,#c8a840);border-radius:100px"></div></div>
+    <span class="mono" style="color:#c8c0ae;font-size:11px;width:30px;text-align:right;flex-shrink:0">${y.viewings}</span>
+    <span class="mono" style="color:#7d7d94;font-size:11px;width:38px;text-align:right;flex-shrink:0">${y.avgRating!=null?'★'+y.avgRating.toFixed(1):'—'}</span>
+  </div>`).join('');
+}
+
+// A trend row is share-of-year (bar) against share-of-all-time (the pale tick).
+// Showing both is the difference between "you watched a lot of horror" and "you
+// watched more horror than you usually do", which is the actual claim.
+function histTrendRows(rows,fmtKey){
+  if(!rows.length) return '';
+  const max=Math.max(...rows.map(r=>Math.max(r.share,r.allShare)))||1;
+  return rows.map(r=>{
+    const pts=Math.round(r.delta*100);
+    const col=r.delta>=0?'#c8a840':'#6f6f8a';
+    const aCol=(r.avgDelta!=null&&r.avgDelta>=0.15)?'#c8a840':'#8c8ca2';
+    return `<div style="display:flex;align-items:center;gap:9px;padding:5px 0">
+      <span style="color:#c8c0ae;font-size:12px;width:86px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(fmtKey(r.key))}</span>
+      <div style="flex:1;position:relative;background:#0e0e1c;border-radius:100px;height:8px;min-width:50px">
+        <div style="position:absolute;top:0;bottom:0;left:0;width:${(r.share/max*100).toFixed(1)}%;background:${col};border-radius:100px;opacity:.9"></div>
+        <div title="All-time: ${Math.round(r.allShare*100)}% of your viewing" style="position:absolute;top:-3px;bottom:-3px;left:${(r.allShare/max*100).toFixed(1)}%;width:2px;background:#f0e8d8;opacity:.5"></div>
+      </div>
+      <span class="mono" title="${Math.round(r.share*100)}% this year vs ${Math.round(r.allShare*100)}% all-time" style="color:${col};font-size:11px;width:52px;text-align:right;flex-shrink:0;white-space:nowrap">${pts>=0?'+':''}${pts} pts</span>
+      <span class="mono" title="${r.avg!=null?`You rated these ★${r.avg.toFixed(2)} this year${r.allAvg!=null?`, ★${r.allAvg.toFixed(2)} all-time`:''}`:'No ratings'}" style="color:${aCol};font-size:11px;width:52px;text-align:right;flex-shrink:0;white-space:nowrap">${r.avg!=null?'★'+r.avg.toFixed(1):'—'}${r.avgDelta!=null&&Math.abs(r.avgDelta)>=0.15?(r.avgDelta>0?' ▲':' ▼'):''}</span>
+    </div>`;
+  }).join('');
+}
+
+function histFilmCard(v,i){
+  const rc=RANK_COLORS[i]||'#9999bb';
+  const g=(v.genres||[]).slice(0,2).join(' · ');
+  return `<div style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:12px;padding:16px;flex:1;min-width:168px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:7px">
+      <span style="color:${rc};font-size:10px;font-weight:700;letter-spacing:1px">#${i+1}</span>
+      <span style="color:#c8a840;font-size:12px;white-space:nowrap">${v.rating>0?histStars(v.rating):'<span style="color:#7d7d94;font-size:11px">unrated</span>'}</span>
+    </div>
+    <div style="font-size:15px;font-weight:600;color:#f0e8d8;line-height:1.3;margin-bottom:3px">${esc(v.name)}</div>
+    <div style="color:#83839b;font-size:11px;margin-bottom:8px">${Number.isFinite(v.filmYear)?v.filmYear:'—'}</div>
+    ${v.director?`<div style="color:#c8c0ae;font-size:12px">${esc(v.director)}</div>`:'<div style="color:#5e5e76;font-size:12px">Director unknown</div>'}
+    ${g?`<div style="color:#7d7d94;font-size:11px;margin-top:3px">${esc(g)}</div>`:''}
+    <div style="color:#6e6e86;font-size:10px;margin-top:10px;border-top:1px solid #14141f;padding-top:7px">Watched ${histDate(v.date)}${v.rewatch?' · ↻ rewatch':''}</div>
+  </div>`;
+}
+
+function histYearSection(y,idx,earliest){
+  const hrs=Math.floor(y.minutes/60);
+  const rtNote=y.runtimeKnown<y.viewings?`${y.runtimeKnown} of ${y.viewings} had a runtime`:'';
+  const trends=[
+    y.genreUp.length?`<div style="flex:1;min-width:260px">
+      ${histSubhead('Leaning into','vs your all-time mix')}
+      ${histTrendRows(y.genreUp,k=>k)}</div>`:'',
+    y.genreDown.length?`<div style="flex:1;min-width:260px">
+      ${histSubhead('Leaning away from','')}
+      ${histTrendRows(y.genreDown,k=>k)}</div>`:'',
+    y.decades.length?`<div style="flex:1;min-width:260px">
+      ${histSubhead('Eras you reached for','by the film&#39;s release decade')}
+      ${histTrendRows(y.decades,k=>k+'s')}</div>`:''
+  ].filter(Boolean).join('');
+
+  return `<section style="margin-bottom:44px">
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;border-bottom:1px solid #1a1a2e;padding-bottom:12px;margin-bottom:20px">
+      <h3 class="mono" style="font-size:34px;font-weight:bold;color:#f0e8d8;letter-spacing:-1px;line-height:1">${y.year}</h3>
+      <div style="color:#8c8ca2;font-size:12px">${y.viewings} viewing${y.viewings!==1?'s':''} · ${y.films} film${y.films!==1?'s':''}</div>
+    </div>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:24px">
+      ${histTile(y.viewings,'Viewings',`${y.firstTime} first-time · ${y.rewatches} rewatch${y.rewatches!==1?'es':''}`)}
+      ${histTile(y.avgRating!=null?'★'+y.avgRating.toFixed(2):'—','Average rating',y.ratedCount<y.viewings?`${y.ratedCount} of ${y.viewings} rated`:'every viewing rated')}
+      ${histTile(hrs?hrs+'h':'—','At the screen',rtNote)}
+      ${histTile(MONTHS[y.peakMonth],'Busiest month',`${y.peakCount} viewing${y.peakCount!==1?'s':''}`)}
+    </div>
+
+    <div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:26px">
+      <div style="flex:1;min-width:280px;max-width:460px">
+        ${histSubhead('By month','')}
+        ${histMonthStrip(y.byMonth,'#c8a840')}
+      </div>
+    </div>
+
+    <div style="margin-bottom:26px">
+      ${histSubhead(`Your top four of ${y.year}`,'ranked by your rating')}
+      <div style="display:flex;gap:12px;flex-wrap:wrap">${y.top4.map(histFilmCard).join('')}</div>
+    </div>
+
+    ${trends?`<div style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:26px">${trends}</div>`:''}
+
+    ${y.discovered.length?`<div>
+      ${histSubhead('Directors you found this year',earliest
+        ? 'first year of your diary, so everyone here counts as new'
+        : 'first time they appear in your diary')}
+      ${y.discovered.map(d=>`<div style="display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid #14141f;flex-wrap:wrap">
+        <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:120px">${esc(d.name)}</span>
+        <span style="color:#7d7d94;font-size:11px">started with ${esc(d.first)}</span>
+        <span class="mono" style="color:#c8a840;font-size:11px;white-space:nowrap">${d.count} film${d.count!==1?'s':''}${d.avg!=null?' · ★'+d.avg.toFixed(1):''}</span>
+      </div>`).join('')}</div>`:''}
+  </section>`;
+}
+
+function renderHistoryPanel(){
+  const el=document.getElementById('cat-history');
+  if(!el) return;
+  const h=getHistory();
+  if(!h||!h.years.length){
+    el.innerHTML=`<div style="text-align:center;padding:70px 20px;color:#8c8ca2;max-width:520px;margin:0 auto">
+      <div style="font-size:34px;margin-bottom:14px">🗓</div>
+      <div style="color:#f0e8d8;font-size:17px;margin-bottom:10px">No watch history yet</div>
+      <div style="font-size:13px;line-height:1.7">A timeline needs the day you watched each film, and only <b style="color:#c8c0ae">diary.csv</b> records that — it is the one export with a <span class="mono" style="color:#c8c0ae">Watched Date</span> column.
+      <br/><br/>ratings.csv carries a date too, but it is the day you <i>logged</i> the film: importing a backlog stamps hundreds of films with one date, so the app ignores it here rather than invent a year you never had.</div>
+      <div style="margin-top:22px"><button class="btn-ghost btn-sm" onclick="resetApp()">Upload diary.csv</button></div>
+    </div>`;
+    return;
+  }
+  const hrs=Math.floor(h.minutes/60), days=(h.minutes/1440);
+  const span=h.first&&h.last?`${h.first.slice(0,4)}–${h.last.slice(0,4)}`:'';
+  const gap=h.libraryFilms>h.films
+    ? `Your upload holds ${h.libraryFilms} films in total; the ${h.films} below are the ones with a diary entry, so anything you logged without a date sits out of these numbers.`
+    : '';
+  const rtNote=h.runtimeKnown<h.views?` — from the ${h.runtimeKnown} of ${h.views} viewings with a known runtime`:'';
+
+  el.innerHTML=`
+    <span class="eyebrow">Watch History</span>
+    <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:28px;color:#f0e8d8;font-weight:700;margin-bottom:8px">Your years in film</h2>
+    <div style="color:#8c8ca2;font-size:13px;line-height:1.7;margin-bottom:26px;max-width:640px">
+      Built from the dated entries in your diary${span?`, ${span}`:''}. Every sitting counts, so a rewatch adds to its year.
+      ${gap?`<br/><span style="color:#998870">${gap}</span>`:''}
+    </div>
+
+    <div style="background:linear-gradient(150deg,#141420,#0e0e18);border:1px solid #1a1a2e;border-radius:12px;padding:22px 24px;margin-bottom:34px">
+      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:24px">
+        ${histTile(h.views,'Viewings',`${h.films} distinct film${h.films!==1?'s':''}`)}
+        ${histTile(h.avgRating!=null?'★'+h.avgRating.toFixed(2):'—','Average rating',`${h.ratedCount} rated`)}
+        ${histTile(hrs?hrs.toLocaleString()+'h':'—','Time at the screen',hrs?`about ${days.toFixed(1)} days`:'')}
+        ${histTile(h.years.length,'Year'+(h.years.length!==1?'s':'')+' logged',span)}
+      </div>
+      <div style="display:flex;gap:30px;flex-wrap:wrap">
+        <div style="flex:1;min-width:250px">
+          ${histSubhead('Viewings per year','bar, then your average rating')}
+          ${histYearBars([...h.years].sort((a,b)=>a.year-b.year))}
+        </div>
+        <div style="flex:1;min-width:250px">
+          ${histSubhead('Every month, all years','')}
+          ${histMonthStrip(h.byMonth,'#c8a840')}
+          <div style="color:#6e6e86;font-size:11px;margin-top:10px">Busiest overall: <span style="color:#c8c0ae">${MONTHS_LONG[h.byMonth.indexOf(Math.max(...h.byMonth))]}</span></div>
+        </div>
+      </div>
+      ${rtNote?`<div style="color:#6e6e86;font-size:11px;margin-top:16px;border-top:1px solid #16162a;padding-top:12px">Hours are estimated${rtNote}.</div>`:''}
+    </div>
+
+    <div style="color:#6e6e86;font-size:11px;line-height:1.7;margin-bottom:22px;padding:10px 14px;background:#0b0b16;border-left:2px solid #252535;border-radius:0 6px 6px 0">
+      In the trend bars below, the gold bar is that genre or era's share of the year and the pale tick is its share of your whole history — the gap between them is the ▲ points figure. ★ is what you rated them.
+    </div>
+
+    ${h.years.map((y,i)=>histYearSection(y,i,i===h.years.length-1)).join('<hr class="section-divider"/>')}`;
 }
 
 function renderGenreStrip(){
@@ -1576,6 +1874,24 @@ function switchCat(cat){
     document.getElementById('cat-'+c).style.display=c===cat?'':'none';
     document.getElementById('tab-btn-'+c).classList.toggle('active',c===cat);
   });
+  applyHistoryChrome();
+}
+
+// The genre chips, the conformity bar and the match-rate banners all describe the
+// scored lists; the genre chip is even a live filter on them. None of it applies
+// to the timeline, and the filter silently does nothing there — so the History
+// tab hides the lot rather than showing controls that don't work.
+function applyHistoryChrome(){
+  const onHistory=STATE.currentCat==='history';
+  ['genre-strip','conformity-strip','data-quality-banner'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    if(onHistory){ el.dataset.histHidden='1'; el.style.display='none'; }
+    else if(el.dataset.histHidden){ delete el.dataset.histHidden; el.style.display=''; }
+  });
+  // renderGenreStrip owns #genre-strip's visibility, so hand it back rather than
+  // forcing it visible on a run where there are no genres to show.
+  if(!onHistory){ renderGenreStrip(); renderConformityStrip(); }
 }
 
 // ─── Name input reactive label ────────────────────────────────────────────────
@@ -1624,6 +1940,157 @@ let _covTimer;
 function scheduleCoverageRefresh(){ clearTimeout(_covTimer); _covTimer=setTimeout(refreshAllCoverage,60); }
 
 // Re-run scoring (and optionally map-building) without re-fetching
+// ─── Watch history ────────────────────────────────────────────────────────────
+// Everything here reads STATE._diary — dated viewings, one row per sitting. The
+// scored lists elsewhere are per-film and undated, so none of them can answer
+// "what did 2025 look like".
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const TREND_MIN = 3;      // viewings a genre/era needs before a share swing means anything
+const TREND_SHOWN = 5;    // movers listed per direction
+
+// Count and rate a set of viewings by some attribute (genre, decade). Shares are
+// taken over the viewings that actually carry the attribute, so films the lookup
+// missed can't drag every genre's share toward zero.
+function profileBy(rows, keysOf){
+  const cnt={}, sum={}, rated={};
+  let base=0;
+  for(const v of rows){
+    const keys=keysOf(v);
+    if(!keys.length) continue;
+    base++;
+    for(const k of keys){
+      cnt[k]=(cnt[k]||0)+1;
+      if(v.rating>0){ sum[k]=(sum[k]||0)+v.rating; rated[k]=(rated[k]||0)+1; }
+    }
+  }
+  return {cnt,sum,rated,base};
+}
+
+// One year against your whole history: share of viewings, and how you rated it.
+// Both halves matter — watching more horror and *enjoying* more horror are
+// different claims, and the card shows them separately.
+function moversAgainst(yearProf, allProf){
+  const out=[];
+  if(!yearProf.base||!allProf.base) return out;
+  for(const k in yearProf.cnt){
+    const n=yearProf.cnt[k];
+    if(n<TREND_MIN) continue;
+    const share=n/yearProf.base, allShare=(allProf.cnt[k]||0)/allProf.base;
+    const avg=yearProf.rated[k]?yearProf.sum[k]/yearProf.rated[k]:null;
+    const allAvg=allProf.rated[k]?allProf.sum[k]/allProf.rated[k]:null;
+    out.push({key:k,count:n,share,allShare,delta:share-allShare,avg,allAvg,
+      avgDelta:(avg!=null&&allAvg!=null)?avg-allAvg:null});
+  }
+  return out.sort((a,b)=>b.delta-a.delta);
+}
+
+function computeHistory(){
+  const diary=STATE._diary||[];
+  if(!diary.length) return null;
+  const fd=STATE._filmData||{};
+
+  // Attach crew, genre and era to every viewing. A film the lookup missed still
+  // counts toward the year's volume — it just sits out the trend sections.
+  const views=diary.map(v=>{
+    const d=fd[v.name+'||'+v.year]||null;
+    return {name:v.name, filmYear:v.year, rating:v.rating, rewatch:v.rewatch, date:v.date,
+      y:+v.date.slice(0,4), mo:+v.date.slice(5,7)-1,
+      director:(d&&d.director)||null,
+      genres:(d&&d.genres)||[],
+      runtime:(d&&Number.isFinite(d.runtime)&&d.runtime>0)?d.runtime:0,
+      decade:Number.isFinite(v.year)?Math.floor(v.year/10)*10:null};
+  });
+
+  const genresOf=v=>v.genres, decadeOf=v=>v.decade==null?[]:[v.decade];
+  const allGenre=profileBy(views,genresOf), allDecade=profileBy(views,decadeOf);
+  const avgOf=rows=>{ const r=rows.filter(v=>v.rating>0); return r.length?r.reduce((a,v)=>a+v.rating,0)/r.length:null; };
+
+  // Earliest diary viewing per director. "New" means new to the diary — if you
+  // logged a backlog without dates, this can't know you'd seen them before.
+  const firstSeen={}, byDirector={};
+  for(const v of views){
+    if(!v.director) continue;
+    if(!firstSeen[v.director]||v.date<firstSeen[v.director]) firstSeen[v.director]=v.date;
+    (byDirector[v.director]||(byDirector[v.director]=[])).push(v);
+  }
+
+  // Rank a year's films: your rating first, then how highly that director scores
+  // on your own Rushmore, then whichever you saw first. One slot per film, so a
+  // film you rewatched twice can't take two places in a top four.
+  const dirScore={};
+  (STATE.directors||[]).forEach(d=>{ dirScore[d.name]=d.score||0; });
+  const pickTop=rows=>{
+    const best={};
+    for(const v of rows){
+      const k=v.name+'||'+v.filmYear;
+      if(!best[k]||v.rating>best[k].rating) best[k]=v;
+    }
+    return Object.values(best).sort((a,b)=>
+      (b.rating-a.rating)
+      ||((dirScore[b.director]||0)-(dirScore[a.director]||0))
+      ||(a.date<b.date?-1:a.date>b.date?1:0)).slice(0,4);
+  };
+
+  const byYear={};
+  for(const v of views) (byYear[v.y]||(byYear[v.y]=[])).push(v);
+
+  const years=Object.keys(byYear).map(Number).sort((a,b)=>b-a).map(y=>{
+    const rows=byYear[y];
+    const byMonth=new Array(12).fill(0);
+    for(const v of rows) byMonth[v.mo]++;
+    const peak=byMonth.indexOf(Math.max(...byMonth));
+    const rated=rows.filter(v=>v.rating>0);
+    const gm=moversAgainst(profileBy(rows,genresOf),allGenre);
+    const dm=moversAgainst(profileBy(rows,decadeOf),allDecade);
+
+    // Directors whose first diary entry landed this year, ranked by how much of
+    // them you went on to watch. A single film only counts as a discovery worth
+    // naming if you rated it highly — otherwise it's just a film you saw once.
+    const discovered=Object.keys(firstSeen).filter(n=>+firstSeen[n].slice(0,4)===y)
+      .map(n=>{
+        const all=byDirector[n];
+        const first=all.reduce((a,b)=>a.date<=b.date?a:b);
+        return {name:n,count:all.length,avg:avgOf(all),first:first.name,firstYear:first.filmYear};
+      })
+      .filter(d=>d.count>=2||(d.avg!=null&&d.avg>=4))
+      .sort((a,b)=>(b.count-a.count)||((b.avg||0)-(a.avg||0)))
+      .slice(0,5);
+
+    return {year:y, viewings:rows.length,
+      films:new Set(rows.map(v=>v.name+'||'+v.filmYear)).size,
+      firstTime:rows.filter(v=>!v.rewatch).length,
+      rewatches:rows.filter(v=>v.rewatch).length,
+      avgRating:avgOf(rows), ratedCount:rated.length,
+      minutes:rows.reduce((a,v)=>a+v.runtime,0),
+      runtimeKnown:rows.filter(v=>v.runtime>0).length,
+      byMonth, peakMonth:peak, peakCount:byMonth[peak],
+      top4:pickTop(rows),
+      genreUp:gm.filter(m=>m.delta>0.02).slice(0,TREND_SHOWN),
+      genreDown:gm.filter(m=>m.delta<-0.02).slice(-TREND_SHOWN).reverse(),
+      decades:dm.slice(0,TREND_SHOWN),
+      discovered};
+  });
+
+  const allMonths=new Array(12).fill(0);
+  for(const v of views) allMonths[v.mo]++;
+  return {years, views:views.length,
+    films:new Set(views.map(v=>v.name+'||'+v.filmYear)).size,
+    avgRating:avgOf(views), ratedCount:views.filter(v=>v.rating>0).length,
+    minutes:views.reduce((a,v)=>a+v.runtime,0),
+    runtimeKnown:views.filter(v=>v.runtime>0).length,
+    byMonth:allMonths, first:views.length?views[0].date:null,
+    last:views.length?views[views.length-1].date:null,
+    // The scoring pipeline sees every uploaded film; the diary is usually a subset.
+    // The gap is worth naming rather than letting the page imply full coverage.
+    libraryFilms:(STATE._films||[]).length};
+}
+
+function getHistory(){
+  if(!STATE._history) STATE._history=computeHistory();
+  return STATE._history;
+}
+
 function computeConformity(films, filmData){
   if(!films||!filmData) return null;
   const pairs=films.filter(f=>{
@@ -1642,6 +2109,7 @@ function computeConformity(films, filmData){
 }
 
 function reScoreAndRender(){
+  STATE._history=null;   // director scores feed the history tie-break
   if(!STATE._byDir) return;
   if(STATE._filmData && STATE._films){
     const films=STATE._activeGenre
@@ -1744,13 +2212,43 @@ function showToast(msg){
 }
 
 function slimScored(arr){
+  // 2dp is well past what the share view renders (it shows one decimal). Full
+  // float precision was spending ~15 characters per director on "4.277777777777778".
+  const r2=n=>Math.round((Number(n)||0)*100)/100;
   return (arr||[]).slice(0,4).map(d=>({
-    n:d.name, fc:d.filmCount, ar:d.avgRating,
+    n:d.name, fc:d.filmCount, ar:r2(d.avgRating),
     tf:(d.topFilms||[]).slice(0,3).map(f=>({n:f.name,y:f.year,r:f.rating}))
   }));
 }
 
-function generateShareURL(){
+// URL-safe base64: +→- /→_ and no = padding, so the string survives being pasted
+// anywhere without escaping.
+function b64encode(bytes){
+  let bin=''; for(const b of bytes) bin+=String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+}
+function b64decode(b64){
+  let s=b64.replace(/-/g,'+').replace(/_/g,'/');
+  while(s.length%4) s+='=';
+  return Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+}
+
+// The payload is JSON with the same handful of keys repeated per person, which
+// deflates to roughly a third of its size. Not a network call — Response/Blob
+// streams are local, so the CSP's connect-src doesn't apply.
+async function deflateRaw(bytes){
+  if(typeof CompressionStream!=='function') return null;
+  try{
+    const s=new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }catch(e){ return null; }
+}
+async function inflateRaw(bytes){
+  const s=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+
+async function generateShareURL(){
   const payload={
     v:3, un:STATE.userName||'',
     g:(STATE.genres||[]).slice(0,8).map(g=>({g:g.genre,c:g.count})),
@@ -1759,18 +2257,19 @@ function generateShareURL(){
     a:slimScored(STATE.actors)
   };
   const bytes=new TextEncoder().encode(JSON.stringify(payload));
-  let bin=''; for(const b of bytes) bin+=String.fromCharCode(b);
-  // URL-safe base64: replace +→- /→_ and strip = padding so URLs survive sharing
-  const b64=btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
-  return window.location.href.split('#')[0]+'#share='+b64;
+  const base=window.location.href.split('#')[0];
+  // #s= is the compressed form. #share= stays as the fallback for browsers without
+  // CompressionStream, and every link ever generated in that format still opens.
+  const packed=await deflateRaw(bytes);
+  if(packed&&packed.length<bytes.length) return base+'#s='+b64encode(packed);
+  return base+'#share='+b64encode(bytes);
 }
 
-function shareResults(){
+async function shareResults(){
   try{
-    const url=generateShareURL();
-    navigator.clipboard.writeText(url)
-      .then(()=>showToast('Link copied!'))
-      .catch(()=>prompt('Copy this link:',url));
+    const url=await generateShareURL();
+    try{ await navigator.clipboard.writeText(url); showToast('Link copied!'); }
+    catch(e){ prompt('Copy this link:',url); }
   }catch(e){ showError('Could not generate share link: '+e.message); }
 }
 
@@ -1798,17 +2297,18 @@ function validateShare(p){
   };
 }
 
-function loadShareFromHash(){
+const SHARE_RE=/^#(s|share)=/;
+function hasShareHash(){ return SHARE_RE.test(window.location.hash); }
+
+async function loadShareFromHash(){
   const hash=window.location.hash;
-  if(!hash.startsWith('#share=')) return false;
+  const m=hash.match(SHARE_RE);
+  if(!m) return false;
   if(hash.length>8000){ showPage('page-upload'); setTimeout(()=>showToast('Share link is too long — it may be corrupted.'),300); return false; }
   try{
-    // Support both URL-safe base64 (new) and standard base64 (old links)
-    let b64=decodeURIComponent(hash.slice('#share='.length));
-    b64=b64.replace(/-/g,'+').replace(/_/g,'/');
-    while(b64.length%4) b64+='=';
-    const bin=atob(b64);
-    const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));
+    const compressed=m[1]==='s';
+    let bytes=b64decode(decodeURIComponent(hash.slice(m[0].length)));
+    if(compressed) bytes=await inflateRaw(bytes);
     const shareState=validateShare(JSON.parse(new TextDecoder().decode(bytes)));
     renderShareView(shareState);
     showPage('page-share');
@@ -1816,7 +2316,8 @@ function loadShareFromHash(){
   }catch(e){
     console.warn('Failed to load share data from URL:',e);
     showPage('page-upload');
-    setTimeout(()=>showToast('Could not load share link — it may be corrupted or outdated.'),300);
+    // A truncated link is the likeliest cause — some messaging apps cut long URLs.
+    setTimeout(()=>showToast('Could not load share link — it may have been cut short in transit.'),300);
     return false;
   }
 }
@@ -1866,11 +2367,14 @@ STATE._filmog=loadFilmogCache();   // exact filmographies fetched in earlier ses
 // on a null element and the catch reported it as a bad payload.
 function initApp(){
   updateConfigBadge();
-  if(!loadShareFromHash()) showPage('page-upload');
+  // Decoding a compressed link is async, so decide on the hash synchronously and
+  // only fall back to the upload page if the decode actually fails.
+  if(!hasShareHash()){ showPage('page-upload'); return; }
+  loadShareFromHash().then(ok=>{ if(!ok) showPage('page-upload'); });
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initApp);
 else initApp();
-window.addEventListener('hashchange',()=>{ if(window.location.hash.startsWith('#share=')) loadShareFromHash(); });
+window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(); });
 </script>
 
 <!-- ══════════════════════════════════ HOW IT WORKS MODAL -->
