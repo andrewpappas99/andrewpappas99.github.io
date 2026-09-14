@@ -389,7 +389,14 @@ function lookupFromDB(film){
 // sounds: Letterboxd and TMDB disagree on release years (Casablanca 1942 vs 1943),
 // punctuation (en-dash vs hyphen in "Mission: Impossible – Fallout"), and
 // subtitles ("Glass Onion" vs "Glass Onion: A Knives Out Mystery"). Buckets by
-// first word so a candidate scan stays small, then applies the same sameFilm rules.
+// first word so a candidate scan stays small.
+//
+// It can't borrow sameFilm's rules. Those are safe inside one director's
+// filmography, but across 29k films "any extra trailing words" matched City Hall
+// (2020) to an 11-minute short called City Hall Ahlen, and X-Men (2000) to a TV
+// special. So a global match needs a real subtitle separator, can't be a short,
+// and anything short of an identical title is marked loose — re-checked against
+// TMDB whenever there's a key.
 let _titleIndex=null;
 function titleIndex(){
   if(_titleIndex) return _titleIndex;
@@ -403,25 +410,51 @@ function titleIndex(){
     const first=sp>=0?t.slice(0,sp):t;
     let arr=_titleIndex.get(first);
     if(!arr) _titleIndex.set(first,arr=[]);
-    arr.push({t,key,y});
+    arr.push({t,key,y,raw:key.slice(0,i)});
   }
   return _titleIndex;
 }
 
-function lookupFuzzyFromDB(film){
+// The main title before a subtitle separator: "Glass Onion: A Knives Out Mystery"
+// and "Mission: Impossible - Fallout" both split, "City Hall Ahlen" does not.
+function titleHead(raw){ return normTitle(String(raw).split(/:\s|\s[-–—]\s/)[0]); }
+
+// 2 = confident, 1 = loose (use it, but verify when TMDB is available), 0 = no.
+function dbMatchQuality(me,c){
+  const dy=Math.abs(me.y-c.y);
+  if(me.t===c.t) return dy<=2?2:dy<=ALT_DATE_YEARS?1:0;   // re-releases drift (Hamilton 2020/2025)
+  if(dy>1) return 0;
+  const [s,sRaw,l,lRaw]=me.t.length<=c.t.length?[me.t,me.raw,c.t,c.raw]:[c.t,c.raw,me.t,me.raw];
+  if(s.length<SUBTITLE_MIN||!l.startsWith(s+' ')) return 0;
+  const entry=FILM_DB[c.key]||'';
+  const rt=parseInt(entry.slice(entry.lastIndexOf('|')+1),10);
+  if(rt>0&&rt<FEATURE_MIN_RUNTIME) return 0;               // a featurette or TV special
+  if(titleHead(lRaw)===s) return 1;                         // "Glass Onion: A Knives Out Mystery"
+  // Letterboxd drops the "Part One" TMDB keeps on retitled sequels (Dead Reckoning)
+  if(/^part (one|1|i)$/.test(l.slice(s.length+1))) return 1;
+  return 0;
+}
+
+function fuzzyDBMatch(film){
   const t=normTitle(film.name);
   if(!t||!Number.isFinite(film.year)) return null;
   const sp=t.indexOf(' ');
   const bucket=titleIndex().get(sp>=0?t.slice(0,sp):t);
   if(!bucket) return null;
-  const me={t,y:film.year};
-  let best=null;
+  const me={t,y:film.year,raw:film.name};
+  let best=null, bestQ=0;
   for(const c of bucket){
-    if(!sameFilm(me,c)) continue;
-    // nearest year wins, so a same-title remake loses to the real match
-    if(!best||Math.abs(c.y-film.year)<Math.abs(best.y-film.year)) best=c;
+    const q=dbMatchQuality(me,c);
+    if(!q) continue;
+    // better quality first, then nearest year, so a same-title remake loses to the real match
+    if(q>bestQ||(q===bestQ&&Math.abs(c.y-film.year)<Math.abs(best.y-film.year))){ best=c; bestQ=q; }
   }
-  return best?parseDBEntry(FILM_DB[best.key]):null;
+  return best?{data:parseDBEntry(FILM_DB[best.key]),loose:bestQ<2,key:best.key}:null;
+}
+
+function lookupFuzzyFromDB(film){
+  const m=fuzzyDBMatch(film);
+  return m?m.data:null;
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -480,12 +513,13 @@ function parseCSVRows(text){
   return rows;
 }
 
+const DIARY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function parseLetterboxdCSV(text){
   const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
   if(!rows.length) throw new Error('Empty file.');
   const header=rows[0].map(h=>h.toLowerCase().trim());
   const gi=k=>header.findIndex(h=>h===k);
-  const nameI=gi('name'),yearI=gi('year'),ratingI=gi('rating'),rewatchI=gi('rewatch');
+  const nameI=gi('name'),yearI=gi('year'),ratingI=gi('rating'),rewatchI=gi('rewatch'),dateI=gi('watched date');
   // Name and Year are both required — an unchecked Year used to drop every row and
   // surface as the far less helpful "No films found."
   const missing=[nameI<0?"'Name'":'',yearI<0?"'Year'":''].filter(Boolean).join(' and ');
@@ -497,9 +531,27 @@ function parseLetterboxdCSV(text){
     const name=(c[nameI]||'').trim(), year=parseInt(c[yearI],10);
     const rating=ratingI>=0?parseFloat(c[ratingI])||0:0;
     const rewatch=rewatchI>=0&&(c[rewatchI]||'').toLowerCase().trim()==='yes';
-    if(name&&year) films.push({name,year,rating,rewatch});
+    if(!name||!year) continue;
+    // Dated rows carry their date so a viewing logged in two files counts once
+    const date=dateI>=0?(c[dateI]||'').trim():'';
+    films.push(DIARY_DATE_RE.test(date)?{name,year,rating,rewatch,date}:{name,year,rating,rewatch});
   }
   return films;
+}
+
+// reviews.csv repeats the diary entry behind every review, so an upload of the
+// whole export counted each reviewed rewatch twice (Moonlight: 2 rewatches → 4).
+// One sitting is one film, one day; merged copies keep the higher rating.
+function dedupeViewings(rows){
+  const byKey=new Map(), out=[];
+  for(const r of rows){
+    if(!r.date){ out.push(r); continue; }
+    const k=r.date+'|'+r.name+'|'+r.year, prev=byKey.get(k);
+    if(!prev){ const c=Object.assign({},r); byKey.set(k,c); out.push(c); continue; }
+    if(r.rating>prev.rating) prev.rating=r.rating;
+    prev.rewatch=prev.rewatch||r.rewatch;
+  }
+  return out;
 }
 
 // The scoring pipeline throws dates away and collapses repeat viewings — right
@@ -510,7 +562,6 @@ function parseLetterboxdCSV(text){
 // That column is the day you *logged* the film, so an import backlog drops
 // hundreds of films onto one date and invents a viewing spike that never
 // happened. A history is only honest from the diary.
-const DIARY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function parseDiaryCSV(text){
   const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
   if(!rows.length) return [];
@@ -769,21 +820,23 @@ async function fetchCrewHybrid(films, apiKey, onProg, signal){
   }
   // Second pass: same DB, fuzzier key. Keyed by the user's Title||Year so every
   // downstream lookup still works off what they actually logged.
+  const loose=[];
   for(let i=misses.length-1;i>=0;i--){
-    const r=lookupFuzzyFromDB(misses[i]);
-    if(!r) continue;
-    filmData[misses[i].name+'||'+misses[i].year]=r;
-    flagRecent(misses[i]);
+    const m=fuzzyDBMatch(misses[i]);
+    if(!m) continue;
+    filmData[misses[i].name+'||'+misses[i].year]=m.data;
+    if(m.loose) loose.push(misses[i]); else flagRecent(misses[i]);
     misses.splice(i,1);
   }
   const dbHits=films.length-misses.length;
   // Phase 2: TMDB for films the DB lacks, plus the recent ones it may have wrong
-  if(apiKey&&(misses.length||recent.length)){
+  if(apiKey&&(misses.length||recent.length||loose.length)){
     const parts=[`Built-in DB: ${dbHits} matched`];
     if(misses.length) parts.push(`${misses.length} not found`);
     if(recent.length) parts.push(`${recent.length} newer than the database`);
+    if(loose.length) parts.push(`${loose.length} matched by title only`);
     onProg(10,parts.join(', ')+' — checking TMDB…');
-    const tmdbData=await fetchCrewTMDB(misses.concat(recent),apiKey,onProg,signal);
+    const tmdbData=await fetchCrewTMDB(misses.concat(recent,loose),apiKey,onProg,signal);
     if(signal?.aborted) return null;
     // Live data overwrites the DB row for the recent films and fills the gaps for
     // the rest; anything TMDB could not resolve keeps whatever the DB gave it.
@@ -799,7 +852,12 @@ async function fetchCrewHybrid(films, apiKey, onProg, signal){
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 function computeScores(byPerson, globalMean){
   const gMean = globalMean ?? 3.5;
-  const qualified=Object.entries(byPerson).filter(([,f])=>f.filter(x=>x.rating>0).length>=MIN_FILMS);
+  // A watched.csv-only upload has no ratings at all. Qualifying on rated films
+  // then let nobody through, and the upload failed outright despite the banner
+  // promising a view-count ranking — so with no ratings, count and rank on views.
+  const unrated=!Object.values(byPerson).some(f=>f.some(x=>x.rating>0));
+  const countOf=f=>unrated?f.length:f.filter(x=>x.rating>0).length;
+  const qualified=Object.entries(byPerson).filter(([,f])=>countOf(f)>=MIN_FILMS);
   if(!qualified.length) return [];
   // reduce rather than Math.max(...spread): the actors map on a large library can
   // hold thousands of qualifiers, and a spread that wide risks the argument limit.
@@ -807,20 +865,20 @@ function computeScores(byPerson, globalMean){
   // Pre-compute logVolQuality for each to find the max for normalization
   const maxLogVQ=qualified.reduce((m,[,f])=>{
     const r=f.filter(x=>x.rating>0);
-    const avg=r.length?r.reduce((s,x)=>s+x.rating,0)/r.length:0;
+    const avg=unrated?1:r.length?r.reduce((s,x)=>s+x.rating,0)/r.length:0;
     return Math.max(m,Math.log2(f.length+1)*avg);
   },1);
   return qualified.map(([name,films])=>{
     const rated=films.filter(f=>f.rating>0);
     const filmCount=films.length, rewatchCount=films.reduce((s,f)=>s+f.rewatchCount,0);
     const avgRating=rated.length?rated.reduce((s,f)=>s+f.rating,0)/rated.length:0;
-    const logVolQuality=Math.log2(filmCount+1)*avgRating;
+    const logVolQuality=Math.log2(filmCount+1)*(unrated?1:avgRating);
     // Taste affinity: how far above community ratings you score this person's films
     const withCommunity=rated.filter(f=>f.voteAvg!=null&&f.voteAvg>0);
-    const delta=withCommunity.length>=2
+    const delta=unrated?0:withCommunity.length>=2
       ? withCommunity.reduce((s,f)=>s+(f.rating-f.voteAvg),0)/withCommunity.length
       : avgRating-gMean; // fallback if no community data
-    const affinityScore=Math.max(0,Math.min(1,(delta+2.5)/5));
+    const affinityScore=unrated?0.5:Math.max(0,Math.min(1,(delta+2.5)/5));
     const wSum=WEIGHTS.ratingSum+WEIGHTS.rewatches+WEIGHTS.top3Score||1;
     const score=(WEIGHTS.ratingSum*(logVolQuality/maxLogVQ)+WEIGHTS.rewatches*(rewatchCount/maxRw)+WEIGHTS.top3Score*affinityScore)/wSum;
     const topFilms=[...rated].sort((a,b)=>b.rating-a.rating).slice(0,3);
@@ -946,19 +1004,28 @@ async function startAnalysis(){
   document.getElementById('proc-title').textContent=STATE.userName?`Sculpting ${STATE.userName}'s mountain…`:'Sculpting your mountain…';
   showPage('page-processing');
   try{
-    let allRaw=[], diary=[], ratedOn={}, wlRows=[];
+    let allRaw=[], diary=[], ratedOn={}, wlRows=[], wlError='';
+    const skipped=[];
+    let lastError=null;
     for(const file of STATE.selectedFiles){
       const text=await file.text();
-      if(isWatchlistFile(file)){ wlRows=wlRows.concat(parseWatchlistCSV(text)); continue; }
-      allRaw=allRaw.concat(parseLetterboxdCSV(text));
+      if(isWatchlistFile(file)){
+        // A bad watchlist shouldn't cost the whole analysis
+        try{ wlRows=wlRows.concat(parseWatchlistCSV(text)); }catch(e){ wlError=e.message; }
+        continue;
+      }
+      // An export holds comments.csv, profile.csv and lists/ alongside the film
+      // logs. Skip what isn't a film log rather than abort on the first one.
+      try{ allRaw=allRaw.concat(parseLetterboxdCSV(text)); }
+      catch(e){ skipped.push(file.name); lastError=e; continue; }
       diary=diary.concat(parseDiaryCSV(text));   // same text, second pass — keeps the dates
       const rd=parseRatingDates(text);
       for(const k in rd) if(!ratedOn[k]||rd[k]<ratedOn[k]) ratedOn[k]=rd[k];
     }
     STATE._diary=dedupeDiary(diary); STATE._ratedOn=ratedOn; STATE._history=null;
     if(STATE.runId!==thisRunId) return;
-    if(!allRaw.length) throw new Error('No films found.');
-    const films=consolidateFilms(allRaw);
+    if(!allRaw.length) throw lastError||new Error('No films found.');
+    const films=consolidateFilms(dedupeViewings(allRaw));
     upd(8,`Found ${films.length} unique films. Looking up directors, writers, and actors…`);
 
     const tmdbKey=getKey('tmdb');
@@ -990,6 +1057,8 @@ async function startAnalysis(){
     // Ranked after the results are up: its TMDB pass can take a while, and the
     // panel shows its own progress rather than holding the whole page hostage.
     if(wlRows.length) setWatchlist(dedupeWatchlist(wlRows));
+    const notes=[skipped.length?`Skipped ${skipped.join(', ')} — no film list inside`:'', wlError?'Watchlist not loaded: '+wlError:''].filter(Boolean);
+    if(notes.length) setTimeout(()=>showToast(notes.join(' · ')),400);
   }catch(e){
     if(STATE.runId!==thisRunId) return;
     showError(e.message||'An unexpected error occurred.');
@@ -1100,7 +1169,7 @@ function downloadPNG(){
   const ctx=canvas.getContext('2d'); ctx.scale(SCALE,SCALE);
   const blob=new Blob([svgStr],{type:'image/svg+xml;charset=utf-8'}), url=URL.createObjectURL(blob);
   const img=new Image();
-  img.onload=function(){ctx.drawImage(img,0,0,W,H);URL.revokeObjectURL(url);canvas.toBlob(function(pb){if(!pb){triggerDownload((un||'my')+'-'+cat+'-rushmore.svg','image/svg+xml',svgStr);return;}const a=document.createElement('a');a.download=(un||'my')+'-'+cat+'-mount-rushmore.png';a.href=URL.createObjectURL(pb);a.click();},'image/png');};
+  img.onload=function(){ctx.drawImage(img,0,0,W,H);URL.revokeObjectURL(url);canvas.toBlob(function(pb){if(!pb){triggerDownload((un||'my')+'-'+cat+'-rushmore.svg','image/svg+xml',svgStr);return;}const a=document.createElement('a');a.download=(un||'my')+'-'+cat+'-mount-rushmore.png';a.href=URL.createObjectURL(pb);a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);},'image/png');};
   img.onerror=function(){URL.revokeObjectURL(url);triggerDownload((un||'my')+'-'+cat+'-rushmore.svg','image/svg+xml',svgStr);};
   img.src=url;
 }
@@ -1984,10 +2053,10 @@ async function setWatchlist(films){
   const seenIdx=librarySeenIndex(), edge=dbSnapshotYear(), todo=[];
   for(const f of films){
     if(isSeenIn(seenIdx,f)) continue;             // won't be ranked, so don't look it up
-    const r=lookupFromDB(f)||lookupFuzzyFromDB(f);
+    const exact=lookupFromDB(f), m=exact?null:fuzzyDBMatch(f), r=exact||(m&&m.data);
     if(r) wl.data[f.name+'||'+f.year]=r;
     // TMDB matching leans on the year, so undated entries can't be looked up
-    if(Number.isFinite(f.year)&&(!r||f.year>=edge)) todo.push(f);
+    if(Number.isFinite(f.year)&&(!r||(m&&m.loose)||f.year>=edge)) todo.push(f);
   }
   const key=getKey('tmdb');
   if(key&&todo.length){
@@ -2124,10 +2193,10 @@ function watchlistListHTML(ranked){
 
 function watchlistBodyHTML(){
   const wl=STATE._watchlist;
-  const input=`<input id="wl-file-input" type="file" accept=".csv" multiple class="sr-only" onchange="importWatchlistFiles(this.files);this.value=''"/>`;
+  const input=tab=>`<input id="wl-file-input" type="file" accept=".csv" multiple class="sr-only"${tab?'':' tabindex="-1"'} onchange="importWatchlistFiles(this.files);this.value=''"/>`;
   if(!wl){
     return `<div style="max-width:600px">
-      ${input}
+      ${input(true)}
       <label class="drop-zone" for="wl-file-input" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="event.preventDefault();this.classList.remove('drag');importWatchlistFiles(event.dataTransfer.files)">
         <div style="font-size:26px;margin-bottom:10px" aria-hidden="true">📋</div>
         <div style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop your watchlist.csv here or click to browse</div>
@@ -2149,10 +2218,10 @@ function watchlistBodyHTML(){
       <label class="slider-label" for="sl-wl-${a.k}">${a.icon} ${a.label} <span id="lbl-wl-${a.k}" class="slider-val">${WL_WEIGHTS[a.k]}</span></label>
       <input type="range" min="0" max="100" step="5" value="${WL_WEIGHTS[a.k]}" id="sl-wl-${a.k}" class="wslider" oninput="onWlWeight('${a.k}',this.value)"/>
     </div>`).join('');
-  return `${input}
+  return `${input(false)}
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
       <div style="color:#9595aa;font-size:12px;flex:1;min-width:200px">${stats}</div>
-      <label for="wl-file-input" class="btn-ghost btn-sm" style="cursor:pointer">↑ Replace</label>
+      <button class="btn-ghost btn-sm" onclick="document.getElementById('wl-file-input').click()">↑ Replace</button>
       <button class="btn-ghost btn-sm" onclick="removeWatchlist()" style="color:#9a7878;border-color:#2a1a1a">Remove</button>
     </div>
     ${wl.pending?`<div style="display:flex;align-items:center;gap:10px;background:#0c0c18;border:1px solid #1e1e2e;border-radius:8px;padding:9px 14px;margin-bottom:14px">
@@ -2207,7 +2276,7 @@ function renderResults(){
   const banners=[];
   if(STATE._activeGenre) banners.push(`Filtered to <b>${esc(STATE._activeGenre)}</b> films only — click the genre chip above to clear.`);
   if(films.length&&!anyRated) banners.push('No star ratings detected — scores are based on view count only. Upload <b>ratings.csv</b> alongside your diary for full scoring.');
-  if(films.length&&!anyRewatch) banners.push('No diary rewatch data detected — the rewatch weight has no effect. Upload <b>diary.csv</b> for rewatch scoring.');
+  if(films.length&&!anyRewatch&&!(STATE._diary||[]).length) banners.push('No diary rewatch data detected — the rewatch weight has no effect. Upload <b>diary.csv</b> for rewatch scoring.');
   if(STATE._totalFilms>0) banners.push(STATE._matchedFilms+' / '+STATE._totalFilms+' films matched'+(STATE._dbMisses>0&&!getKey('tmdb')?' — '+STATE._dbMisses+' not found in the built-in database. Add a free <b>TMDB API key</b> in ⚙ to look them up live.':'.'));
   const el=document.getElementById('data-quality-banner');
   el.innerHTML=banners.map(b=>`<div style="background:#1a1410;border-left:3px solid #c8a840;padding:10px 20px;font-size:12px;color:#998870">${b}</div>`).join('');
