@@ -1,0 +1,14 @@
+{
+  "name": "Cinematic Mount Rushmore",
+  "short_name": "Mt Rushmore",
+  "description": "The four directors, writers and actors who define your taste, from your Letterboxd export.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#08080f",
+  "theme_color": "#08080f",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
