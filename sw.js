@@ -18,8 +18,17 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== self.location.origin || !DB_PATH.test(url.pathname)) return;
   e.respondWith(caches.open(CACHE).then(async cache => {
     const cached = await cache.match(e.request);
-    const refresh = fetch(e.request).then(res => {
-      if (res && res.ok) cache.put(e.request, res.clone());
+    const refresh = fetch(e.request).then(async res => {
+      if (!res || !res.ok) return res;
+      // A changed database is only used on the next load, so tell the page,
+      // which offers a reload rather than quietly showing yesterday's data.
+      const changed = !cached || (cached.headers.get('etag') || cached.headers.get('last-modified') || '') !==
+        (res.headers.get('etag') || res.headers.get('last-modified') || 'x');
+      await cache.put(e.request, res.clone());
+      if (cached && changed) {
+        const clients = await self.clients.matchAll({ type: 'window' });
+        clients.forEach(c => c.postMessage({ type: 'db-updated' }));
+      }
       return res;
     }).catch(() => null);
     if (cached) { e.waitUntil(refresh); return cached; }

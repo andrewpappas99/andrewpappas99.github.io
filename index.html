@@ -283,6 +283,10 @@ input,select,button{font-family:inherit}
         <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Top Genres</span>
         <div id="genre-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+        <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;flex-shrink:0">Decades</span>
+        <div id="decade-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
     </div>
   </div>
 
@@ -504,7 +508,7 @@ function lookupFuzzyFromDB(film){
 const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
   runId:0, abortController:null, _dbMisses:0, _missList:[], _totalFilms:0, _matchedFilms:0,
-  _activeGenre:null, _filmog:{}, recMode:'balanced',
+  _activeGenre:null, _activeDecade:null, _filmog:{}, recMode:'balanced',
   _diary:[], _history:null, _ratedOn:{},
   recSource:'directors', _watchlist:null, _wlAbort:null, _wlRun:0, _wlShowAll:false,
   wlMaxRuntime:0, _lastPick:null, recPeople:true, wlStreamOnly:false };
@@ -1439,7 +1443,7 @@ function resetApp(){
   cancelBackgroundLookups();
   STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];
   STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;
-  STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._missList=[];STATE._activeGenre=null;STATE._conformity=null;
+  STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._missList=[];STATE._activeGenre=null;STATE._activeDecade=null;STATE._conformity=null;
   STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';
   clearWatchlist();resetProviders();STATE.recSource='directors';invalidateCoverage();resetSettings();
   _catUI={}; _dirtyPanels.clear();
@@ -2043,8 +2047,12 @@ function dirByName(name){
 function isCompleteCoverage(cov){ return !!(cov&&cov.total>0&&!cov.missing.length); }
 
 function scoreDirectors(byDir, globalMean){
-  return applyCompletionBonus(computeScores(byDir,globalMean));
+  return applyCompletionBonus(computeScores(byDir,globalMean,qualifyMin()));
 }
+// One decade of a typical library is thin — a 500-film library has nobody with
+// three rated 1990s films by the same director — so inside a decade filter two
+// rated films are enough. The genre chips keep the normal minimum.
+function qualifyMin(){ return STATE._activeDecade?Math.min(MIN_FILMS,2):MIN_FILMS; }
 
 // computeScores builds fresh objects every call, so the bonus can't stack.
 // Only an exact (TMDB) filmography earns points. The built-in estimate lists a
@@ -2310,7 +2318,7 @@ function renderCategoryPanel(cat){
   if(!data.length){
     return `<div style="text-align:center;padding:80px 0;color:#7d7d94">
       <div style="font-size:32px;margin-bottom:12px">${icon}</div>
-      <div style="font-size:15px">Not enough ${catLabel.toLowerCase()} with ${MIN_FILMS}+ rated films in your library.</div>
+      <div style="font-size:15px">Not enough ${catLabel.toLowerCase()} with ${qualifyMin()}+ rated films${anyFilter()?' in '+esc(filterLabel()):' in your library'}.</div>
       <div style="font-size:12px;margin-top:8px">Lower “Min rated films to qualify” under ⚖ Settings.</div>
     </div>`;
   }
@@ -2340,7 +2348,6 @@ function renderCategoryPanel(cat){
     <div class="ornament-rule">◆</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:32px">${top4CardsHTML}</div>
     ${data.length>4?`<div class="ornament-rule">◆</div><div style="margin-bottom:32px"><div class="eyebrow" style="margin-bottom:12px">Also Considered</div><div style="display:flex;flex-wrap:wrap;gap:10px">${alsoHTML}</div></div>`:''}
-    ${miniRushmoresHTML(cat)}
     <div class="filmstrip-rule"></div>
     <div style="margin-bottom:16px">
       <div class="eyebrow" style="margin-bottom:8px">All ${catLabel} (${data.length})</div>
@@ -2361,53 +2368,18 @@ function renderCategoryPanel(cat){
 // ─── Rushmores by genre and by decade ────────────────────────────────────────
 // The same scoring, run over the slice of the library in one genre or one
 // decade. A slice is small, so two rated films are enough to qualify here.
-const MINI_MIN_FILMS=2, MINI_GENRES=6, MINI_DECADES=6;
-function miniRushmoreSets(){
-  const films=STATE._films, fd=STATE._filmData;
-  if(!films||!fd) return [];
-  const sets=[];
-  for(const g of (STATE.genres||[]).slice(0,MINI_GENRES))
-    sets.push({kind:'genre',key:g.genre,label:g.genre,films:films.filter(f=>{ const d=fd[f.name+'||'+f.year]; return d&&(d.genres||[]).includes(g.genre); })});
-  const byDec={};
-  for(const f of films){ if(!Number.isFinite(f.year)) continue; const d=Math.floor(f.year/10)*10; (byDec[d]||(byDec[d]=[])).push(f); }
-  Object.entries(byDec).sort((a,b)=>b[1].length-a[1].length).slice(0,MINI_DECADES).sort((a,b)=>b[0]-a[0])
-    .forEach(([d,fs])=>sets.push({kind:'decade',key:+d,label:d+'s',films:fs}));
-  return sets;
-}
-function miniRushmores(cat){
-  const fd=STATE._filmData;
-  const pick=maps=>cat==='directors'?maps.byDir:cat==='writers'?maps.byWriter:maps.byActor;
-  const out=[];
-  for(const s of miniRushmoreSets()){
-    const list=computeScores(pick(buildPersonMaps(s.films,fd)),STATE._globalMean,MINI_MIN_FILMS).slice(0,4);
-    if(list.length>=2) out.push(Object.assign({top:list},s));
-  }
-  return out;
-}
-function miniRushmoresHTML(cat){
-  if(STATE._activeGenre) return '';   // the page is already one genre
-  const sets=miniRushmores(cat);
-  if(!sets.length) return '';
-  const cards=sets.map(s=>{
-    const svg=buildInlineSVG(s.top,`${s.label} ${CAT_LABELS[cat]}`,d=>`${d.filmCount} film${d.filmCount!==1?'s':''}`,'10px 10px 0 0');
-    const inner=`<div class="hist-card-in" style="border:1px solid #1c1c2c;border-radius:10px;overflow:hidden;background:#0d0d1c;height:100%">${svg}
-      <div style="padding:8px 12px;display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="color:#c8c0b0;font-size:12px;font-weight:bold">${esc(s.label)}</span><span style="color:#7d7d94;font-size:11px">${s.films.length} film${s.films.length!==1?'s':''}${s.kind==='genre'?' · filter ›':''}</span></div></div>`;
-    return s.kind==='genre'
-      ? `<button type="button" class="hist-card" title="${esc('Filter the whole page to '+s.label)}" onclick="setGenreFilter(${esc(JSON.stringify(s.key))})">${inner}</button>`
-      : `<div>${inner}</div>`;
-  });
-  return `<div class="ornament-rule">◆</div><div style="margin-bottom:32px">
-    <div class="eyebrow" style="margin-bottom:6px">By genre and decade</div>
-    <div style="color:#8c8ca2;font-size:11px;margin-bottom:12px;max-width:640px">Your top four ${CAT_LABELS[cat].toLowerCase()} inside each of your biggest genres and decades — ${MINI_MIN_FILMS}+ rated films there is enough to qualify. Click a genre to filter the whole page to it.</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px">${cards.join('')}</div></div>`;
-}
-
 // ─── Blind spots ──────────────────────────────────────────────────────────────
 // The database is in popularity order, so the first N films it lists for a genre
 // or a decade are that genre's or decade's best-known work. "You have seen 2 of
 // the 40 biggest westerns" is the question the History tab raises and does not
-// answer.
-const BLIND_TOP=40, BLIND_SHOWN=4, BLIND_SKIP_GENRES=new Set(['TV Movie','Documentary']);
+// answer. Everything before BLIND_OLD_CUTOFF shares one bucket: as separate
+// decades, every blind spot was the 1920s to the 1940s, which nobody is going
+// to fix one decade at a time.
+// Popularity on TMDB is partly whatever is trending, so a film needs a decent
+// community score and two years on the shelf before it counts as one of the
+// famous ones. (Sorting on the score alone was worse: with no vote counts, an
+// obscure film with three ten-star votes tops every list.)
+const BLIND_TOP=40, BLIND_SHOWN=4, BLIND_FROM_YEAR=1920, BLIND_OLD_CUTOFF=1960, BLIND_MIN_VOTE=3.25, BLIND_SETTLE_YEARS=2, BLIND_SKIP_GENRES=new Set(['TV Movie','Documentary']);
 let BLIND_MIN=20;   // a bucket needs this many films before a percentage means anything
 let _blindIdx=null;
 function blindIndex(){
@@ -2416,15 +2388,16 @@ function blindIndex(){
   const genres=Object.create(null), decades=Object.create(null);
   for(const key in FILM_DB){
     const i=key.lastIndexOf('||'), y=parseInt(key.slice(i+2),10);
-    if(!Number.isFinite(y)||y>=thisYear||y<1920) continue;
+    if(!Number.isFinite(y)||y>thisYear-BLIND_SETTLE_YEARS||y<BLIND_FROM_YEAR) continue;
     const p=FILM_DB[key].split('|');
+    if((parseFloat(p[4])||0)<BLIND_MIN_VOTE) continue;
     const rt=parseInt(p[5],10)||0;
     if(rt&&rt<FEATURE_MIN_RUNTIME) continue;
     const gs=p[3]?p[3].split(','):[];
     if(gs.includes('Documentary')) continue;
     const film={title:key.slice(0,i),y,key,dir:p[0]||'',poster:POSTER_RE.test(p[7]||'')?p[7]:null};
     for(const g of gs){ if(BLIND_SKIP_GENRES.has(g)) continue; const b=genres[g]||(genres[g]=[]); if(b.length<BLIND_TOP) b.push(film); }
-    const d=Math.floor(y/10)*10, db=decades[d]||(decades[d]=[]);
+    const d=y<BLIND_OLD_CUTOFF?0:Math.floor(y/10)*10, db=decades[d]||(decades[d]=[]);
     if(db.length<BLIND_TOP) db.push(film);
   }
   return (_blindIdx={genres,decades});
@@ -2438,7 +2411,7 @@ function blindSpots(){
   const by=(a,b)=>a.pct-b.pct||a.label.localeCompare(b.label);
   return {
     genres:Object.entries(idx.genres).filter(([,l])=>l.length>=BLIND_MIN).map(([k,l])=>score(k,l,'genre',k)).sort(by),
-    decades:Object.entries(idx.decades).filter(([,l])=>l.length>=BLIND_MIN).map(([k,l])=>score(k+'s',l,'decade',+k)).sort(by)
+    decades:Object.entries(idx.decades).filter(([,l])=>l.length>=BLIND_MIN).map(([k,l])=>score(+k?k+'s':'Before '+BLIND_OLD_CUTOFF,l,'decade',+k)).sort(by)
   };
 }
 function blindSpotsHTML(){
@@ -2454,7 +2427,7 @@ function blindSpotsHTML(){
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${list.slice(0,BLIND_SHOWN).map(row).join('')}</div>`:'';
   return `<div style="margin-top:40px">
     <div class="eyebrow" style="margin-bottom:6px">Blind spots</div>
-    <div style="color:#8c8ca2;font-size:11px;max-width:640px">How much of the ${BLIND_TOP} most popular films in each genre and decade you have seen, least first — with the biggest ones you are missing.</div>
+    <div style="color:#8c8ca2;font-size:11px;max-width:640px">How much of the ${BLIND_TOP} best-known films in each genre and decade you have seen, least first — with the biggest ones you are missing.</div>
     ${grid('Genres',b.genres)}${grid('Decades',b.decades)}</div>`;
 }
 
@@ -2827,7 +2800,7 @@ function buildRecommendations(mode){
   // under every genre; with a filter on, unknown means excluded.
   const inGenre=g=>!ag||(!!g&&g.split(',').indexOf(ag)>=0);
   const add=(f,info)=>{
-    if(!inGenre(f.g)) return;
+    if(!inGenre(f.g)||!inDecade(f.y)) return;
     const k=f.t+'#'+f.y, prev=cands.get(k);
     if(prev){ if(info.cov&&!prev.cov) Object.assign(prev,info); else if(info.via&&!prev.via) prev.via=info.via; return; }
     cands.set(k,Object.assign({f},info));
@@ -2974,7 +2947,7 @@ function renderRecsPanel(){
       ${src('directors','🎬 From people you love')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}
     </div>`;
 
-  if(onWl){ el.innerHTML=header+watchlistBodyHTML(); hydrateProviders(); return; }
+  if(onWl){ el.innerHTML=header+watchlistBodyHTML()+blindSpotsHTML(); hydrateProviders(); return; }
 
   const tabs=Object.keys(REC_MODES).map(k=>{
     const m=REC_MODES[k], on=k===mode;
@@ -3000,7 +2973,7 @@ function renderRecsPanel(){
 
   if(!recs.length){
     el.innerHTML=header+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
-      <div style="font-size:15px">Nothing to recommend${STATE._activeGenre?' in '+esc(STATE._activeGenre):''} — you've seen everything we know of.</div>
+      <div style="font-size:15px">Nothing to recommend${anyFilter()?' in '+esc(filterLabel()):''} — you've seen everything we know of.</div>
       <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>`;
     return;
   }
@@ -3182,7 +3155,7 @@ function surpriseMe(){
   STATE._lastPick=x.f.name+'||'+x.f.year;
   const body=document.getElementById('pick-modal-body');
   body.innerHTML=`<div class="eyebrow" style="margin-bottom:10px">🎲 Tonight's pick</div>
-    <div style="color:#9595aa;font-size:12px;margin-bottom:14px">Drawn at random from your top ${pool.length} match${pool.length!==1?'es':''}${STATE.wlMaxRuntime?` under ${fmtDuration(STATE.wlMaxRuntime)}`:''}${STATE._activeGenre?` in ${esc(STATE._activeGenre)}`:''}${servicesPhrase()?' '+esc(servicesPhrase()):''}.</div>
+    <div style="color:#9595aa;font-size:12px;margin-bottom:14px">Drawn at random from your top ${pool.length} match${pool.length!==1?'es':''}${STATE.wlMaxRuntime?` under ${fmtDuration(STATE.wlMaxRuntime)}`:''}${anyFilter()?` in ${esc(filterLabel())}`:''}${servicesPhrase()?' '+esc(servicesPhrase()):''}.</div>
     ${wlCardHTML(x,r.ranked.indexOf(x),r.gMean)}
     <div style="display:flex;gap:10px;margin-top:16px">
       <button class="btn-gold btn-sm" onclick="surpriseMe()" ${pool.length>1?'':'disabled style="opacity:.5"'}>🎲 Pick another</button>
@@ -3217,7 +3190,7 @@ function buildWatchlistCardSVG(posters){
   posters=posters||{};
   const r=rankWatchlist(), W=1080, H=1350, un=STATE.userName;
   const top=r.ranked.slice(0,WL_CARD_ROWS);
-  const filt=[servicesPhrase(),STATE.wlMaxRuntime?'under '+fmtDuration(STATE.wlMaxRuntime):'',STATE._activeGenre||''].filter(Boolean).join(' · ');
+  const filt=[servicesPhrase(),STATE.wlMaxRuntime?'under '+fmtDuration(STATE.wlMaxRuntime):'',filterLabel()].filter(Boolean).join(' · ');
   const rows=top.map((x,i)=>{
     const y=300+i*112, {f,d,s}=x;
     const col=s.match>=70?'#6fbf8f':s.match>=55?'#c8a840':'#8888aa';
@@ -3277,7 +3250,7 @@ function rankWatchlist(){
     if(isSeenIn(seenIdx,f)){ out.seen++; continue; }
     const d=wl.data[f.name+'||'+f.year];
     if(!d){ out.unmatched.push(f); continue; }
-    if(ag&&!(d.genres||[]).includes(ag)){ out.hiddenByGenre++; continue; }
+    if((ag&&!(d.genres||[]).includes(ag))||!inDecade(f.year)){ out.hiddenByGenre++; continue; }
     // An unknown runtime can't promise to fit the evening, so it sits out the filter
     if(STATE.wlMaxRuntime&&!(d.runtime>0&&d.runtime<=STATE.wlMaxRuntime)){ out.hiddenByRuntime++; continue; }
     if(STATE.wlStreamOnly&&getKey('tmdb')){
@@ -3355,8 +3328,8 @@ function watchlistListHTML(ranked){
       wl.pending?'Ranking as soon as the lookups finish…'
       :r.awaiting.length?'Checking where your watchlist is streaming…'
       :r.hiddenByStream&&STATE.wlStreamOnly?`Nothing on your watchlist is streaming on ${Object.keys(SERVICES).length?'your services':'a subscription service'} right now.`
-      :r.hiddenByRuntime&&STATE.wlMaxRuntime?`Nothing on your watchlist runs under ${fmtDuration(STATE.wlMaxRuntime)}${r.hiddenByGenre?' in '+esc(STATE._activeGenre):''}.`
-      :r.hiddenByGenre?`Nothing on your watchlist in ${esc(STATE._activeGenre)}.`
+      :r.hiddenByRuntime&&STATE.wlMaxRuntime?`Nothing on your watchlist runs under ${fmtDuration(STATE.wlMaxRuntime)}${r.hiddenByGenre?' in '+esc(filterLabel()):''}.`
+      :r.hiddenByGenre?`Nothing on your watchlist in ${esc(filterLabel())}.`
       :"Nothing left to rank — you've seen everything on this watchlist we could identify."}</div>`);
   } else {
     const shown=STATE._wlShowAll?r.ranked:r.ranked.slice(0,WL_SHOWN);
@@ -3396,7 +3369,7 @@ function watchlistBodyHTML(){
   const stats=[`<b style="color:#c8c0b0">${wl.films.length}</b> on the list`,
     wl.pending?'':`<b style="color:#c8c0b0">${r.ranked.length}</b> ranked`,
     r.seen?`${r.seen} already seen`:'',
-    r.hiddenByGenre?`${r.hiddenByGenre} outside ${esc(STATE._activeGenre)}`:'',
+    r.hiddenByGenre?`${r.hiddenByGenre} outside ${esc(filterLabel())}`:'',
     r.hiddenByRuntime?`${r.hiddenByRuntime} too long`:'',
     r.hiddenByStream?`${r.hiddenByStream} not on ${Object.keys(SERVICES).length?'your services':'streaming'}`:'',
     r.unmatched.length&&!wl.pending?`${r.unmatched.length} without data`:''].filter(Boolean).join(' · ');
@@ -3508,7 +3481,7 @@ function renderDataBanners(){
   const anyRated=films.some(f=>f.rating>0);
   const anyRewatch=films.some(f=>f.rewatchCount>0);
   const banners=[];
-  if(STATE._activeGenre) banners.push(`Filtered to <b>${esc(STATE._activeGenre)}</b> films only — click the genre chip above to clear.`);
+  if(anyFilter()) banners.push(`Filtered to <b>${esc(filterLabel())}</b> films only — click the highlighted chip above to clear.`);
   if(films.length&&!anyRated) banners.push('No star ratings detected — scores are based on view count only. Upload <b>ratings.csv</b> alongside your diary for full scoring.');
   if(films.length&&!anyRewatch&&!(STATE._diary||[]).length) banners.push('No diary rewatch data detected — the rewatch weight has no effect. Upload <b>diary.csv</b> for rewatch scoring.');
   if(STATE._totalFilms>0) banners.push(missListHTML());
@@ -4042,6 +4015,7 @@ function renderGenreStrip(){
   const strip=document.getElementById('genre-strip');
   if(!genres.length){strip.style.display='none';return;}
   strip.style.display='';
+  renderDecadeChips();
   const top=genres.slice(0,12);
   const ag=STATE._activeGenre;
   const chips=top.map(g=>{
@@ -4077,6 +4051,42 @@ function setGenreFilter(genre){
   STATE._activeGenre=(genre===STATE._activeGenre)?null:genre;
   renderGenreStrip();
   reScoreAndRender();
+}
+// The decade chips work like the genre chips: one live filter over every scored
+// list, the recommendations and the ranked watchlist, and the two combine.
+function setDecadeFilter(decade){
+  STATE._activeDecade=(decade===STATE._activeDecade)?null:decade;
+  renderGenreStrip();
+  reScoreAndRender();
+}
+function anyFilter(){ return !!(STATE._activeGenre||STATE._activeDecade); }
+// "Drama", "1990s" or "Drama · 1990s" — for banners and empty states
+function filterLabel(){ return [STATE._activeGenre,STATE._activeDecade?STATE._activeDecade+'s':''].filter(Boolean).join(' · '); }
+function inDecade(year){ return !STATE._activeDecade||(Number.isFinite(year)&&Math.floor(year/10)*10===STATE._activeDecade); }
+// A film passes the filters when it is in the active genre (given its data) and decade
+function passesFilters(film,data){
+  if(STATE._activeGenre&&!(data&&(data.genres||[]).includes(STATE._activeGenre))) return false;
+  return inDecade(film.year);
+}
+function libraryDecades(){
+  const counts=Object.create(null);
+  for(const f of STATE._films||[]){ if(Number.isFinite(f.year)&&f.year>1800){ const d=Math.floor(f.year/10)*10; counts[d]=(counts[d]||0)+1; } }
+  return Object.keys(counts).map(Number).sort((a,b)=>a-b).map(d=>({decade:d,count:counts[d]}));
+}
+function renderDecadeChips(){
+  const el=document.getElementById('decade-chips'); if(!el) return;
+  const decades=libraryDecades(), ad=STATE._activeDecade;
+  const row=el.parentElement; if(row) row.style.display=decades.length?'':'none';
+  const chips=decades.map(d=>{
+    const active=ad===d.decade;
+    return `<button type="button" onclick="setDecadeFilter(${d.decade})" aria-pressed="${active}" style="display:flex;align-items:center;gap:6px;background:${active?'#c8a840':'#111120'};border:1px solid ${active?'#c8a840':'#1e1e2e'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .15s">
+      <span style="color:${active?'#08080f':'#c8c0b0'};font-size:12px">${d.decade}s</span>
+      <span style="color:${active?'#08080f99':'#c8a84077'};font-size:10px">${d.count}</span>
+      ${active?'<span style="color:#08080f;font-size:10px;margin-left:2px">×</span>':''}
+    </button>`;
+  }).join('');
+  const allChip=ad?`<button onclick="setDecadeFilter(null)" style="display:flex;align-items:center;gap:4px;background:transparent;border:1px solid #2a2a3a;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;color:#9595aa;font-size:12px;transition:all .15s">All decades</button>`:'';
+  el.innerHTML=allChip+chips;
 }
 
 function switchCat(cat){
@@ -4566,21 +4576,21 @@ function reScoreAndRender(){
   STATE._history=null;   // director scores feed the history tie-break
   if(!STATE._byDir) return;
   if(STATE._filmData && STATE._films){
-    const films=STATE._activeGenre
-      ? STATE._films.filter(f=>{ const d=STATE._filmData[f.name+'||'+f.year]; return d&&(d.genres||[]).includes(STATE._activeGenre); })
+    const films=anyFilter()
+      ? STATE._films.filter(f=>passesFilters(f,STATE._filmData[f.name+'||'+f.year]))
       : STATE._films;
     const maps=buildPersonMaps(films,STATE._filmData);
     STATE._byDir=maps.byDir; STATE._byWriter=maps.byWriter; STATE._byActor=maps.byActor;
     // Only update full genre list and global mean when not filtering
-    if(!STATE._activeGenre){
+    if(!anyFilter()){
       STATE.genres=maps.genres;
       STATE._globalMean=maps.globalMean;
       STATE._conformity=computeConformity(STATE._films,STATE._filmData);
     }
   }
   STATE.directors=scoreDirectors(STATE._byDir,STATE._globalMean);
-  STATE.writers=computeScores(STATE._byWriter,STATE._globalMean);
-  STATE.actors=computeScores(STATE._byActor,STATE._globalMean);
+  STATE.writers=computeScores(STATE._byWriter,STATE._globalMean,qualifyMin());
+  STATE.actors=computeScores(STATE._byActor,STATE._globalMean,qualifyMin());
   renderResults();
 }
 
@@ -4886,7 +4896,18 @@ function registerDBCache(){
   try{
     if(!('serviceWorker' in navigator)||!/^https?:$/.test(location.protocol)) return;
     navigator.serviceWorker.register('sw.js').catch(()=>{});
+    navigator.serviceWorker.addEventListener('message',e=>{ if(e.data&&e.data.type==='db-updated') offerDBReload(); });
   }catch(e){}
+}
+// The worker serves the cached database and refreshes it behind the page, so a
+// rebuilt one (new films, posters) is on the device but not in use until a reload.
+function offerDBReload(){
+  if(document.getElementById('db-reload')) return;
+  const el=document.createElement('div');
+  el.id='db-reload'; el.setAttribute('role','status');
+  el.style.cssText='position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:60;background:#14141f;border:1px solid #c8a84066;border-radius:10px;padding:10px 14px;display:flex;gap:12px;align-items:center;font-size:12px;color:#c8c0b0;box-shadow:0 6px 24px #0008;max-width:calc(100vw - 32px)';
+  el.innerHTML=`<span>A newer film database has downloaded.</span><button class="btn-ghost btn-sm" onclick="location.reload()">Reload to use it</button><button class="btn-ghost btn-sm" aria-label="Dismiss" onclick="this.parentElement.remove()">✕</button>`;
+  document.body.appendChild(el);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initApp);
 else initApp();
