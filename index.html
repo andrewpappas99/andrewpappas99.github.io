@@ -1100,6 +1100,24 @@ function rebuildMapsFromScored(){
 // ─── Restoring saved data ─────────────────────────────────────────────────────
 // One loader for both a Save Data .json file and the session this browser kept,
 // so the two can never drift apart. Throws on a file it can't use.
+// A remembered session or save file from before the database carried posters
+// has film data without them, so the cards drawn from it showed placeholders
+// while Watch Next, which reads the database directly, showed posters. Fill the
+// gaps from the current database by exact key; anything else stays as it was.
+function backfillPosters(){
+  const meta=window.FILM_DB_META; if(!(meta&&meta.posters)) return 0;
+  let filled=0;
+  const posterFor=key=>{ const e=FILM_DB[key]; if(!e) return null; const p=parseDBEntry(e); return p.poster||null; };
+  const fill=table=>{ for(const key in table){ const d=table[key]; if(d&&!d.poster){ const p=posterFor(key); if(p){ d.poster=p; filled++; } } } };
+  if(STATE._filmData) fill(STATE._filmData);
+  if(STATE._watchlist&&STATE._watchlist.data) fill(STATE._watchlist.data);
+  // Exact filmographies: [title, year, runtime, voteAvg, genres, poster]
+  for(const name in STATE._filmog||{}){
+    const rec=STATE._filmog[name]; if(!rec||!Array.isArray(rec.f)) continue;
+    for(const a of rec.f){ if(!a[5]){ const p=posterFor(a[0]+'||'+a[1]); if(p){ a[5]=p; filled++; } } }
+  }
+  return filled;
+}
 function applySavedData(d){
   if(!d||typeof d!=='object') throw new Error('Invalid cache file.');
   if(!d.version||!d.directors) throw new Error('Invalid cache file.');
@@ -1147,6 +1165,7 @@ function applySavedData(d){
   clearWatchlist();
   const savedWl=sanitizeWatchlist(d.watchlist);
   if(savedWl){ STATE._watchlist=Object.assign(savedWl,{pending:false,progress:''}); STATE.recSource='watchlist'; }
+  backfillPosters();
   if(d.wlWeights&&typeof d.wlWeights==='object')
     WL_AXES.forEach(a=>{ const v=Number(d.wlWeights[a.k]); if(Number.isFinite(v)&&v>=0&&v<=100) WL_WEIGHTS[a.k]=v; });
   if(d.recMode&&REC_MODES[d.recMode]) STATE.recMode=d.recMode;
