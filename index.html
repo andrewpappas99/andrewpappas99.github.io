@@ -34,7 +34,7 @@ input,select,button{font-family:inherit}
 /* The file input stays in the tab order — display:none removed it entirely, which
    left keyboard users with no way to reach the only upload control in the app. */
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-#file-input:focus-visible+.drop-zone{border-color:#c8a840;box-shadow:0 0 0 3px #c8a84033}
+#file-input:focus-visible+.drop-zone,#wl-file-input:focus-visible+.drop-zone{border-color:#c8a840;box-shadow:0 0 0 3px #c8a84033}
 .nav{background:#06060f;border-bottom:1px solid #151525;position:sticky;top:0;z-index:100}
 .nav-inner{display:flex;align-items:center;gap:10px;height:54px;flex-wrap:wrap;padding:0 20px;max-width:980px;margin:0 auto}
 .nav-tabs{display:flex;gap:2px;flex-wrap:wrap}
@@ -120,7 +120,7 @@ input,select,button{font-family:inherit}
     <label id="drop-zone" class="drop-zone" for="file-input">
       <div style="font-size:26px;margin-bottom:10px" aria-hidden="true">🎬</div>
       <div id="drop-label" style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop files here or click to browse</div>
-      <div style="color:#8c8ca2;font-size:12px">diary.csv · ratings.csv · watched.csv · or a previously saved .json data file</div>
+      <div style="color:#8c8ca2;font-size:12px">diary.csv · ratings.csv · watched.csv · watchlist.csv · or a previously saved .json data file</div>
     </label>
     <!-- Config -->
     <div style="margin-top:18px;background:#0e0e1c;border:1px solid #1a1a2c;border-radius:12px;overflow:hidden">
@@ -264,6 +264,10 @@ input,select,button{font-family:inherit}
                 Count documentaries
               </label>
             </div>
+            <div class="slider-group" style="min-width:170px" title="Points added to a director's score once you've seen every feature in their filmography">
+              <div class="slider-label">100% filmography bonus <span id="lbl-completionBonus" class="slider-val">+3 pts</span></div>
+              <input type="range" min="0" max="10" step="1" value="3" id="sl-completionBonus" class="wslider" oninput="onSettingSlider('completionBonus',this.value)"/>
+            </div>
           </div>
         </div>
       </div>
@@ -310,6 +314,30 @@ let MIN_RUNTIME = FEATURE_MIN_RUNTIME, COUNT_DOCS = false;
 // v5 stores [title, year, runtime, voteAvg, genres] and derives the match key from
 // the title, so changing normalization can never desync from cached records.
 const FILMOG_CACHE_KEY = 'cmr_filmog_v5';
+// Points (on the 0-100 card scale) added to a director whose feature filmography
+// you've fully seen. Flat rather than proportional, so it breaks near-ties without
+// lifting a mid-table director past someone you clearly rate higher.
+const COMPLETION_BONUS_DEFAULT = 3;
+let COMPLETION_BONUS = COMPLETION_BONUS_DEFAULT;
+
+// ─── Watchlist ranking ────────────────────────────────────────────────────────
+// A watchlist film is scored on how its people and genres have landed with you
+// before. Each axis is a signed value in [-1, 1]: 0 is "no signal", so a film the
+// lookup knows little about sits mid-table rather than at the bottom.
+const WL_WEIGHTS_DEFAULT = { director:30, writer:15, actor:25, genre:20, acclaim:10 };
+let WL_WEIGHTS = Object.assign({}, WL_WEIGHTS_DEFAULT);
+const WL_AXES = [
+  {k:'director', label:'Directors', icon:'🎬'},
+  {k:'writer',   label:'Writers',   icon:'✍️'},
+  {k:'actor',    label:'Actors',    icon:'🎭'},
+  {k:'genre',    label:'Genres',    icon:'🎞'},
+  {k:'acclaim',  label:'TMDB rating', icon:'⭐'}
+];
+// Bayesian prior, in films: one 5★ rating shouldn't outweigh a run of 4★ ones.
+// Genres get a heavier prior because every library holds dozens of each.
+const TASTE_PRIOR_PERSON = 2, TASTE_PRIOR_GENRE = 6;
+const WL_SHOWN = 48;         // cards before "show all"
+const WL_MAX_FILMS = 3000;   // Letterboxd watchlists can be long; beyond this is noise
 
 // ─── Recommendations ──────────────────────────────────────────────────────────
 // Every mode blends the same three axes; they differ only in emphasis, so each
@@ -401,7 +429,8 @@ const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   directors:[], writers:[], actors:[], genres:[],
   runId:0, abortController:null, _dbMisses:0, _totalFilms:0, _matchedFilms:0,
   _activeGenre:null, _filmog:{}, recMode:'balanced',
-  _diary:[], _history:null, _ratedOn:{} };
+  _diary:[], _history:null, _ratedOn:{},
+  recSource:'directors', _watchlist:null, _wlAbort:null, _wlRun:0, _wlShowAll:false };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -561,6 +590,71 @@ function sanitizeDiary(raw){
       rating:Number(r.rating)||0,rewatch:!!r.rewatch,date:r.date});
   }
   return dedupeDiary(out);
+}
+
+// watchlist.csv has exactly the columns watched.csv has — Date, Name, Year,
+// Letterboxd URI — so no header test can tell them apart. The filename is the only
+// signal, and it matters: dropped in with the rest of an export, a watchlist used
+// to be read as films you'd seen.
+function isWatchlistFile(file){ return /watchlist/i.test(String(file&&file.name||'')); }
+
+// Only Letterboxd's own hosts, since the URI ends up in an href.
+const LB_URI_RE=/^https:\/\/(boxd\.it|letterboxd\.com)\/[\w\-\/]+$/;
+
+function parseWatchlistCSV(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(!rows.length) return [];
+  // A list export (lists/*.csv) opens with a few lines describing the list itself,
+  // so the film header is the first row carrying both Name and Year.
+  const lower=r=>r.map(h=>h.toLowerCase().trim());
+  const hi=rows.findIndex(r=>{ const h=lower(r); return h.includes('name')&&h.includes('year'); });
+  if(hi<0) throw new Error("No 'Name' and 'Year' columns found. Upload watchlist.csv (or a list export) from your Letterboxd data.");
+  const header=lower(rows[hi]);
+  const gi=k=>header.findIndex(h=>h===k);
+  if(gi('rating')>=0||gi('watched date')>=0) throw new Error('That looks like your diary or ratings, not a watchlist — upload watchlist.csv.');
+  const nameI=gi('name'), yearI=gi('year'), dateI=gi('date');
+  const uriI=gi('letterboxd uri')>=0?gi('letterboxd uri'):gi('url');
+  const out=[];
+  for(let i=hi+1;i<rows.length;i++){
+    const c=rows[i];
+    const name=(c[nameI]||'').trim();
+    if(!name) continue;
+    const year=parseInt(c[yearI],10), uri=uriI>=0?(c[uriI]||'').trim():'', date=dateI>=0?(c[dateI]||'').trim():'';
+    out.push({name,year:Number.isFinite(year)?year:null,
+      uri:LB_URI_RE.test(uri)?uri:'', added:DIARY_DATE_RE.test(date)?date:''});
+  }
+  return dedupeWatchlist(out);
+}
+
+function dedupeWatchlist(rows){
+  const seen=new Set(), out=[];
+  for(const r of rows){
+    const k=r.name+'||'+r.year;
+    if(seen.has(k)) continue;
+    seen.add(k); out.push(r);
+    if(out.length>=WL_MAX_FILMS) break;
+  }
+  return out;
+}
+
+function sanitizeWatchlist(raw){
+  if(!raw||typeof raw!=='object'||!Array.isArray(raw.films)) return null;
+  const films=dedupeWatchlist(raw.films.filter(f=>f&&typeof f.name==='string'&&f.name.trim()).map(f=>({
+    name:f.name.slice(0,200), year:Number.isFinite(f.year)?f.year:null,
+    uri:LB_URI_RE.test(String(f.uri||''))?f.uri:'', added:DIARY_DATE_RE.test(String(f.added||''))?f.added:''})));
+  if(!films.length) return null;
+  // Lookup rows share the filmData shape; keep only well-formed fields.
+  const strs=a=>Array.isArray(a)?a.filter(s=>typeof s==='string').slice(0,12):[];
+  const data={};
+  const rd=raw.data&&typeof raw.data==='object'?raw.data:{};
+  for(const f of films){
+    const k=f.name+'||'+f.year, d=rd[k];
+    if(!d||typeof d!=='object') continue;
+    data[k]={director:typeof d.director==='string'?d.director:null,writers:strs(d.writers),actors:strs(d.actors),
+      genres:strs(d.genres),voteAvg:Number.isFinite(d.voteAvg)?Math.min(5,Math.max(0,d.voteAvg)):null,
+      runtime:Number.isFinite(d.runtime)?d.runtime:0};
+  }
+  return {films,data};
 }
 
 function consolidateFilms(rawFilms){
@@ -773,8 +867,12 @@ function handleFileInput(files){
   const arr=Array.from(files); if(!arr.length)return;
   document.getElementById('file-input').value='';
   if(arr.some(f=>f.size>25*1024*1024)){ showError('File too large (>25 MB). Please check your export.'); return; }
-  if(arr.length===1&&arr[0].name.endsWith('.json')){
-    arr[0].text().then(t=>{
+  // A watchlist is ranked against taste, so on its own there is nothing to rank it by
+  const wlFiles=arr.filter(f=>isWatchlistFile(f)&&f.name.endsWith('.csv'));
+  const rest=arr.filter(f=>!wlFiles.includes(f));
+  if(!rest.length){ showError('That looks like your watchlist on its own. Upload it together with diary.csv or ratings.csv (or a saved .json data file) so there’s a taste profile to rank it against.'); return; }
+  if(rest.length===1&&rest[0].name.endsWith('.json')){
+    rest[0].text().then(t=>{
       try{
         const d=JSON.parse(t);
         if(!d.version||!d.directors) throw new Error('Invalid cache file.');
@@ -791,6 +889,7 @@ function handleFileInput(files){
         if(typeof d.topActors==='number'){ TOP_ACTORS=d.topActors; const el=document.getElementById('sl-topActors'); if(el){el.value=TOP_ACTORS;document.getElementById('lbl-topActors').textContent=TOP_ACTORS;} }
         if(typeof d.minRuntime==='number'&&d.minRuntime>=20&&d.minRuntime<=90){ MIN_RUNTIME=d.minRuntime; const el=document.getElementById('sl-minRuntime'); if(el){el.value=MIN_RUNTIME;document.getElementById('lbl-minRuntime').textContent=MIN_RUNTIME+' min';} }
         if(typeof d.countDocs==='boolean'){ COUNT_DOCS=d.countDocs; const el=document.getElementById('cb-countDocs'); if(el) el.checked=COUNT_DOCS; }
+        if(typeof d.completionBonus==='number'&&d.completionBonus>=0&&d.completionBonus<=10) setCompletionBonusUI(d.completionBonus);
         // Version 3+: has raw filmData → full slider support
         if(d.version>=3 && d.filmData && d.films){
           if(!d.films.length||!Object.keys(d.filmData).length) throw new Error('Cache file has no film data.');
@@ -802,7 +901,7 @@ function handleFileInput(files){
           STATE._conformity=computeConformity(d.films,d.filmData);
           if(genres.length) STATE.genres=genres;
           // Re-score with current weights/settings
-          STATE.directors=computeScores(byDir,globalMean);
+          STATE.directors=scoreDirectors(byDir,globalMean);
           STATE.writers=computeScores(byWriter,globalMean);
           STATE.actors=computeScores(byActor,globalMean);
         } else {
@@ -813,7 +912,11 @@ function handleFileInput(files){
           STATE.actors=d.actors||[];
           rebuildMapsFromScored();
         }
+        clearWatchlist();
+        const savedWl=sanitizeWatchlist(d.watchlist);
+        if(savedWl){ STATE._watchlist=Object.assign(savedWl,{pending:false,progress:''}); STATE.recSource='watchlist'; }
         renderResults(); showPage('page-results');
+        if(wlFiles.length) importWatchlistFiles(wlFiles);   // a fresh CSV beats the saved copy
       }catch(e){showError('Could not load cache: '+e.message);}
     }); return;
   }
@@ -843,9 +946,10 @@ async function startAnalysis(){
   document.getElementById('proc-title').textContent=STATE.userName?`Sculpting ${STATE.userName}'s mountain…`:'Sculpting your mountain…';
   showPage('page-processing');
   try{
-    let allRaw=[], diary=[], ratedOn={};
+    let allRaw=[], diary=[], ratedOn={}, wlRows=[];
     for(const file of STATE.selectedFiles){
       const text=await file.text();
+      if(isWatchlistFile(file)){ wlRows=wlRows.concat(parseWatchlistCSV(text)); continue; }
       allRaw=allRaw.concat(parseLetterboxdCSV(text));
       diary=diary.concat(parseDiaryCSV(text));   // same text, second pass — keeps the dates
       const rd=parseRatingDates(text);
@@ -874,14 +978,18 @@ async function startAnalysis(){
     STATE._globalMean=globalMean;
     STATE._conformity=computeConformity(films,filmData);   // else the strip only ever
     STATE.genres=genres;                                   // appeared after a slider drag
-    STATE.directors=computeScores(byDir,globalMean);
+    STATE.directors=scoreDirectors(byDir,globalMean);
     STATE.writers=computeScores(byWriter,globalMean);
     STATE.actors=computeScores(byActor,globalMean);
+    clearWatchlist();
 
     if(!STATE.directors.length&&!STATE.writers.length&&!STATE.actors.length)
       throw new Error(`Could not identify enough crew/cast data. Found ${Object.keys(byDir).length} directors, ${Object.keys(byWriter).length} writers, ${Object.keys(byActor).length} actors with ${MIN_FILMS}+ films.`);
 
     upd(100,''); renderResults(); showPage('page-results');
+    // Ranked after the results are up: its TMDB pass can take a while, and the
+    // panel shows its own progress rather than holding the whole page hostage.
+    if(wlRows.length) setWatchlist(dedupeWatchlist(wlRows));
   }catch(e){
     if(STATE.runId!==thisRunId) return;
     showError(e.message||'An unexpected error occurred.');
@@ -891,12 +999,13 @@ async function startAnalysis(){
 function upd(pct,msg){ document.getElementById('prog-fill').style.width=pct+'%'; document.getElementById('prog-pct').textContent=pct+'%'; document.getElementById('proc-msg').textContent=msg; }
 function showError(msg){ document.getElementById('err-msg').textContent=msg; showPage('page-error'); }
 function cancelAnalysis(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} showPage('page-upload'); }
-function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
+function resetApp(){ STATE.runId++; if(STATE.abortController){STATE.abortController.abort();STATE.abortController=null;} STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._activeGenre=null;STATE._conformity=null;STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';clearWatchlist();STATE.recSource='directors';invalidateCoverage(); document.getElementById('file-input').value=''; document.getElementById('drop-label').textContent='Drop files here or click to browse'; switchCat('directors'); showPage('page-upload'); }
 
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function exportCache(){
   const payload={
-    version:8,   // 8 = adds rating dates, which mark a film as already seen
+    version:9,   // 9 = adds the watchlist and the 100% filmography bonus
+                 // 8 = adds rating dates, which mark a film as already seen
                  // 7 = carries dated diary viewings for the history page
                  // 6 = filmog entries are [title, year, runtime, voteAvg, genres]
     userName:STATE.userName,
@@ -905,6 +1014,7 @@ function exportCache(){
     topActors:TOP_ACTORS,
     minRuntime:MIN_RUNTIME,
     countDocs:COUNT_DOCS,
+    completionBonus:COMPLETION_BONUS,
     // Exact TMDB filmographies — expensive to fetch, so carry them along
     filmog:STATE._filmog||{},
     directors:STATE.directors,
@@ -917,7 +1027,9 @@ function exportCache(){
     // Dated viewings — the only source the history page will read
     diary:STATE._diary||[],
     // name||year -> earliest rating date, so revisits stay out of the top four
-    ratedOn:STATE._ratedOn||{}
+    ratedOn:STATE._ratedOn||{},
+    // Watchlist plus its lookups, so a reload doesn't repeat the TMDB pass
+    watchlist:STATE._watchlist?{films:STATE._watchlist.films,data:STATE._watchlist.data}:null
   };
   const data=JSON.stringify(payload,null,2);
   triggerDownload((STATE.userName||'my')+'-rushmore-data.json','application/json',data);
@@ -1320,6 +1432,51 @@ function dirByName(name){
   return _dirByName[name];
 }
 
+// ─── 100% filmography bonus ───────────────────────────────────────────────────
+// Coverage is computed from a director's logged films plus their filmography, never
+// from their score, so it can feed back into the score without any circularity.
+function isCompleteCoverage(cov){ return !!(cov&&cov.total>0&&!cov.missing.length); }
+
+function scoreDirectors(byDir, globalMean){
+  return applyCompletionBonus(computeScores(byDir,globalMean));
+}
+
+// computeScores builds fresh objects every call, so the bonus can't stack.
+function applyCompletionBonus(list){
+  for(const d of list){
+    const cov=computeCoverage(d);
+    d.baseScore=d.score;
+    d.complete=isCompleteCoverage(cov);
+    d.completeExact=d.complete&&cov.source==='tmdb';
+    if(d.complete) d.score+=COMPLETION_BONUS/100;
+  }
+  invalidateCoverage();
+  return list.sort((a,b)=>b.score-a.score);
+}
+
+// Coverage also moves without a re-score — an exact filmography arrives, or the
+// feature definition changes — and the bonus must follow or the ranking goes stale.
+function completionOutOfDate(names){
+  if(!STATE._byDir) return false;
+  const list=names?names.map(dirByName).filter(Boolean):STATE.directors;
+  return list.some(d=>isCompleteCoverage(computeCoverage(d))!==!!d.complete);
+}
+
+function setCompletionBonusUI(v){
+  COMPLETION_BONUS=v;
+  const el=document.getElementById('sl-completionBonus'); if(el) el.value=v;
+  const lbl=document.getElementById('lbl-completionBonus'); if(lbl) lbl.textContent=v?'+'+v+' pts':'off';
+}
+
+function completeBadgeHTML(d){
+  if(!d||!d.complete) return '';
+  const tip=(d.completeExact
+    ? `You've seen every feature ${d.name} has directed, per TMDB.`
+    : `You've seen every feature the built-in database lists for ${d.name} — open the filmography bar and fetch the exact list to confirm.`)
+    +(COMPLETION_BONUS?` Worth +${COMPLETION_BONUS} points on their score.`:'');
+  return `<span title="${esc(tip)}" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;background:#4a9a6a14;border:1px solid #4a9a6a44;color:#6fbf8f;border-radius:20px;padding:1px 8px;font-size:10px;white-space:nowrap">🏁 ${d.completeExact?'':'≈ '}100%${COMPLETION_BONUS?' · +'+COMPLETION_BONUS:''}</span>`;
+}
+
 // ─── Time left in a filmography ───────────────────────────────────────────────
 // Runtime is missing for a slice of both tiers — 4-field DBs predate the runtime
 // column, and TMDB reports 0 for some obscure credits. Dropping those entries
@@ -1411,6 +1568,9 @@ function renderFilmogModal(){
     <div style="color:#c8a840;margin-bottom:10px"><span class="mono" style="font-size:22px;font-weight:bold">${cov.pct}%</span>
       <span style="color:#a9a9bc;font-size:13px;margin-left:6px">${cov.seen} of ${cov.total}${cov.truncated?'+':''} feature${cov.total!==1?'s':''} seen</span></div>
     <div class="progress-bar" style="margin-bottom:12px"><div class="progress-fill" style="width:${cov.pct}%"></div></div>
+    ${isCompleteCoverage(cov)?`<div style="background:#4a9a6a14;border:1px solid #4a9a6a44;border-radius:8px;padding:8px 12px;color:#6fbf8f;font-size:12px;line-height:1.6;margin-bottom:12px">
+      🏁 Filmography complete${COMPLETION_BONUS?` — <b>+${COMPLETION_BONUS} points</b> on their Rushmore score`:''}.${exact?'':' <span style="color:#8c8ca2">Based on the estimate — fetch the exact filmography below to confirm.</span>'}
+    </div>`:''}
     <div style="font-size:11px;line-height:1.65;margin-bottom:16px">${source}${rule}</div>
     ${exact?'':`<div style="margin-bottom:22px">
       ${loading
@@ -1424,7 +1584,7 @@ function renderFilmogModal(){
         <div style="flex:1"></div>
         ${timeLeft}
       </div>
-      ${missing.length?missing.map(f=>row(f.y,f.title,'')).join(''):`<div style="color:#4a9a4a;font-size:13px">You've seen every film listed here.</div>`}
+      ${missing.length?missing.map(f=>row(f.y,f.title,justWatchLinkHTML(f.title,'#9a9ab4','small'))).join(''):`<div style="color:#4a9a4a;font-size:13px">You've seen every film listed here.</div>`}
     </div>
     <div>
       <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Seen <span style="color:#8c8ca2">(${seenFilms.length})</span></div>
@@ -1441,6 +1601,7 @@ function updateCoverageBlocks(name){
   });
   if(_filmogModalName===name) renderFilmogModal();   // keep an open modal in step
   scheduleRecsRender();                              // a fuller filmography changes the pool
+  if(completionOutOfDate([name])) scheduleRender();  // and may add or remove the 100% bonus
 }
 
 // ─── Person Card HTML ─────────────────────────────────────────────────────────
@@ -1464,7 +1625,7 @@ function personCardHTML(d,rank,cat){
         <div style="font-family:'Playfair Display',Georgia,serif;font-style:italic;font-size:26px;line-height:1;color:${ac};margin-top:1px">${rank}</div>
       </div>
       <div style="min-width:0;flex:1"><div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(d.name)}</div>
-        <div style="color:#a0a0b4;font-size:11px;margin-top:2px"><span class="mono">${d.ratedCount}</span> rated${d.filmCount>d.ratedCount?' · <span class="mono">'+(d.filmCount-d.ratedCount)+'</span> watched':''}${d.rewatchCount>0?' · <span class="mono">'+d.rewatchCount+'</span> rewatch'+(d.rewatchCount!==1?'es':''):''}</div></div>
+        <div style="color:#a0a0b4;font-size:11px;margin-top:2px"><span class="mono">${d.ratedCount}</span> rated${d.filmCount>d.ratedCount?' · <span class="mono">'+(d.filmCount-d.ratedCount)+'</span> watched':''}${d.rewatchCount>0?' · <span class="mono">'+d.rewatchCount+'</span> rewatch'+(d.rewatchCount!==1?'es':''):''}</div>${cat==='directors'?completeBadgeHTML(d):''}</div>
       <div style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</div>
     </div>
     <div style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px">
@@ -1546,6 +1707,31 @@ function renderCategoryPanel(cat){
   `;
 }
 
+// ─── Where to watch ───────────────────────────────────────────────────────────
+// JustWatch has no public API, but its site search takes a plain title, so a deep
+// link needs no key and no request from here. Its URLs are per country (GB is
+// "uk"); take the region from the browser's language tags and fall back to the US.
+const JUSTWATCH_LOCALES=new Set(['us','uk','ca','au','nz','ie','de','at','ch','fr','be','nl','es','it','pt','br','mx','ar','jp','kr','in','se','no','dk','fi','pl','za']);
+let _jwLocale=null;
+function justWatchLocale(){
+  if(_jwLocale) return _jwLocale;
+  const langs=(typeof navigator!=='undefined'&&(navigator.languages||[navigator.language]))||[];
+  for(const l of langs){
+    const m=/[-_]([A-Za-z]{2})\b/.exec(String(l||''));
+    if(!m) continue;
+    const c=m[1].toLowerCase()==='gb'?'uk':m[1].toLowerCase();
+    if(JUSTWATCH_LOCALES.has(c)) return (_jwLocale=c);
+  }
+  return (_jwLocale='us');
+}
+function justWatchURL(title){
+  return `https://www.justwatch.com/${justWatchLocale()}/search?q=${encodeURIComponent(String(title))}`;
+}
+function justWatchLinkHTML(title,col,size){
+  const small=size==='small';
+  return `<a href="${esc(justWatchURL(title))}" target="_blank" rel="noopener noreferrer" title="${esc('Where to stream, rent or buy '+title)}" style="color:${col};font-size:${small?10:11}px;text-decoration:none;border-bottom:1px solid ${col}44;white-space:nowrap;flex-shrink:0">${small?'▶ Where to watch':'Where to watch · JustWatch →'}</a>`;
+}
+
 // ─── Recommendations ──────────────────────────────────────────────────────────
 // The candidate pool is already sitting there: every director's `missing` list is
 // exactly "films by someone you like that you haven't seen". All this does is
@@ -1620,7 +1806,10 @@ function recCardHTML(r,i){
       <div style="height:100%;width:${r.covPct}%;background:linear-gradient(90deg,${ac}88,${ac});border-radius:2px"></div>
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${chips.join('')}</div>
-    <a href="${esc(search)}" target="_blank" rel="noopener noreferrer" style="color:${ac};font-size:11px;text-decoration:none;border-bottom:1px solid ${ac}44">Find on Letterboxd →</a>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <a href="${esc(search)}" target="_blank" rel="noopener noreferrer" style="color:${ac};font-size:11px;text-decoration:none;border-bottom:1px solid ${ac}44">Find on Letterboxd →</a>
+      ${justWatchLinkHTML(r.title,ac)}
+    </div>
   </div>`;
 }
 
@@ -1628,41 +1817,356 @@ function renderRecsPanel(){
   const el=document.getElementById('cat-recs');
   if(!el) return;
   const mode=STATE.recMode, w=REC_MODES[mode]||REC_MODES.balanced;
+  const onWl=STATE.recSource==='watchlist', wl=STATE._watchlist, un=STATE.userName;
+  const src=(k,label)=>{
+    const on=STATE.recSource===k;
+    return `<button onclick="setRecSource('${k}')" aria-pressed="${on}" style="background:${on?'#1c1c30':'transparent'};border:none;color:${on?'#f0e8d8':'#9595aa'};border-radius:7px;padding:7px 14px;cursor:pointer;font-family:inherit;font-size:12px;transition:all .15s">${label}</button>`;
+  };
+  const header=`
+    <div style="margin-bottom:16px">
+      <div class="eyebrow" style="margin-bottom:5px">🍿 What to Watch Next</div>
+      <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(onWl
+        ? (un?un+"'s":'Your')+' Watchlist, Ranked'
+        : 'Unseen From '+(un?un+"'s":'Your')+' Directors')}</h1>
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">${onWl
+        ? 'Your Letterboxd watchlist, ordered by how well each film fits the directors, writers, actors and genres you rate highest.'
+        : "Unseen films from the directors you rate highest, weighted toward the filmographies you're closest to finishing."}</p>
+    </div>
+    <div role="group" aria-label="Recommend from" style="display:inline-flex;gap:3px;background:#0c0c18;border:1px solid #1e1e2e;border-radius:10px;padding:3px;margin-bottom:16px;flex-wrap:wrap">
+      ${src('directors','🎬 Director filmographies')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}
+    </div>`;
+
+  if(onWl){ el.innerHTML=header+watchlistBodyHTML(); return; }
+
   const tabs=Object.keys(REC_MODES).map(k=>{
     const m=REC_MODES[k], on=k===mode;
     return `<button onclick="setRecMode('${k}')" title="${esc(m.hint)}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:6px 14px;cursor:pointer;font-family:inherit;font-size:12px;transition:all .15s">${m.icon} ${esc(m.label)}</button>`;
   }).join('');
 
   if(!STATE.directors.length){
-    el.innerHTML=`<div style="text-align:center;padding:80px 0;color:#7d7d94">
-      <div style="font-size:32px;margin-bottom:12px">🍿</div>
+    el.innerHTML=header+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">No directors qualify yet — lower “Min films to qualify” in ⚖ Settings.</div></div>`;
     return;
   }
 
   const recs=buildRecommendations(mode);
-  const header=`
-    <div style="margin-bottom:16px">
-      <div class="eyebrow" style="margin-bottom:5px">🍿 What to Watch Next</div>
-      <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(STATE.userName?STATE.userName+"'s Watchlist":'Your Watchlist')}</h1>
-      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">
-        Unseen films from the directors you rate highest, weighted toward the filmographies you're closest to finishing.
-      </p>
-    </div>
+  const modes=`
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${tabs}</div>
     <div style="color:#8c8ca2;font-size:11px;margin-bottom:20px">${esc(w.hint)} — director affinity ${Math.round(w.affinity*100)}% · completion ${Math.round(w.completion*100)}% · ${w.invert?'obscurity':'acclaim'} ${Math.round(w.acclaim*100)}%</div>`;
 
   if(!recs.length){
-    el.innerHTML=header+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
+    el.innerHTML=header+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">Nothing to recommend${STATE._activeGenre?' in '+esc(STATE._activeGenre):''} — you've seen everything we know of.</div>
       <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>`;
     return;
   }
-  el.innerHTML=header+`<div class="dir-grid">${recs.map(recCardHTML).join('')}</div>
+  el.innerHTML=header+modes+`<div class="dir-grid">${recs.map(recCardHTML).join('')}</div>
     <div style="color:#777787;font-size:11px;margin-top:20px;line-height:1.7">
       Drawn from ${STATE.directors.length} qualifying directors. Coverage marked “est.” comes from the built-in database,
       which only lists a director's best-known work — run ⟳ Exact filmography on the Directors tab for the full picture.
     </div>`;
+}
+
+// ─── Taste profile ────────────────────────────────────────────────────────────
+// How each person and genre has landed with you, taken from the whole library.
+// Never the genre-filtered maps: under a filter every film would look like a
+// perfect genre match and every out-of-genre director would look unseen.
+const clamp1=v=>Math.max(-1,Math.min(1,v));
+
+// lift is your mean rating above your own overall average, shrunk toward zero by
+// `prior` phantom films — so one 5★ rating reads as a hint and ten as a verdict.
+function tasteEntry(films,gMean,prior){
+  let sum=0,n=0;
+  for(const f of films) if(f.rating>0){ sum+=f.rating-gMean; n++; }
+  return {count:films.length,rated:n,avg:n?sum/n+gMean:0,lift:sum/(n+prior)};
+}
+
+function buildTasteProfile(){
+  let byDir=STATE._byDir||{}, byWriter=STATE._byWriter||{}, byActor=STATE._byActor||{};
+  let gMean=STATE._globalMean??3.5, matched=0;
+  const byGenre={};
+  const films=STATE._films, fd=STATE._filmData;
+  if(films&&fd){
+    const maps=buildPersonMaps(films,fd);   // unfiltered, and honours TOP_ACTORS
+    byDir=maps.byDir; byWriter=maps.byWriter; byActor=maps.byActor; gMean=maps.globalMean;
+    for(const f of films){
+      const d=fd[f.name+'||'+f.year];
+      if(!d) continue;
+      matched++;
+      (d.genres||[]).forEach(g=>{ (byGenre[g]||(byGenre[g]=[])).push(f); });
+    }
+  }
+  // 70% how you rate them, 30% how often you seek them out — unrated viewings are
+  // still a signal. Sixteen films earns full familiarity.
+  const people=map=>{
+    const out=new Map();
+    for(const name in map){
+      const e=tasteEntry(map[name],gMean,TASTE_PRIOR_PERSON);
+      e.v=clamp1(0.7*clamp1(e.lift)+0.3*Math.min(1,Math.log2(e.count+1)/4));
+      out.set(name,e);
+    }
+    return out;
+  };
+  const genre=new Map();
+  for(const g in byGenre){
+    const e=tasteEntry(byGenre[g],gMean,TASTE_PRIOR_GENRE);
+    e.share=matched?e.count/matched:0;
+    e.v=clamp1(0.7*clamp1(e.lift/0.75)+0.3*Math.min(1,e.share/0.3));
+    genre.set(g,e);
+  }
+  return {dir:people(byDir),writer:people(byWriter),actor:people(byActor),genre,gMean};
+}
+
+function scoreWatchlistFilm(d,taste){
+  const byV=(a,b)=>b.e.v-a.e.v;
+  const dirE=d.director?taste.dir.get(d.director)||null:null;
+  // A writer-director would otherwise be counted twice for the same credit
+  const writers=(d.writers||[]).filter(n=>n!==d.director).map(n=>({n,e:taste.writer.get(n)})).filter(x=>x.e).sort(byV);
+  const actors=(d.actors||[]).slice(0,TOP_ACTORS).map(n=>({n,e:taste.actor.get(n)})).filter(x=>x.e).sort(byV);
+  const allGenres=d.genres||[];
+  const genres=allGenres.map(n=>({n,e:taste.genre.get(n)})).filter(x=>x.e).sort(byV);
+  const ax={
+    director:dirE?dirE.v:0,
+    writer:writers.length?writers[0].e.v:0,
+    // Best-liked cast member, plus half of the next one: two favourites beat one
+    actor:actors.length?clamp1(actors[0].e.v+(actors[1]?0.5*Math.max(0,actors[1].e.v):0)):0,
+    // Mean over all the film's genres, so a long genre list can't inflate it
+    genre:allGenres.length?genres.reduce((s,x)=>s+x.e.v,0)/allGenres.length:0,
+    acclaim:d.voteAvg>0?clamp1((d.voteAvg-3.2)/1.0):0
+  };
+  const wSum=WL_AXES.reduce((s,a)=>s+WL_WEIGHTS[a.k],0)||1;
+  const total=WL_AXES.reduce((s,a)=>s+WL_WEIGHTS[a.k]*ax[a.k],0)/wSum;
+  return {ax,total,match:Math.round(50+50*total),dirE,writers,actors,genres};
+}
+
+// Everything you've logged, by normalized title — a watchlist entry you've since
+// watched is noise. Letterboxd usually clears those itself, but not always.
+function librarySeenIndex(){
+  const idx=new Map();
+  const add=f=>{ const t=normTitle(f.name); if(!t) return; if(!idx.has(t)) idx.set(t,[]); idx.get(t).push(f.year); };
+  (STATE._films||[]).forEach(add);
+  (STATE._diary||[]).forEach(add);
+  if(!STATE._films) [STATE._byDir,STATE._byWriter,STATE._byActor].forEach(m=>{ for(const k in (m||{})) m[k].forEach(add); });
+  return idx;
+}
+function isSeenIn(idx,f){
+  const ys=idx.get(normTitle(f.name));
+  return !!ys&&ys.some(y=>!Number.isFinite(y)||!Number.isFinite(f.year)||Math.abs(y-f.year)<=1);
+}
+
+// ─── Watchlist loading ────────────────────────────────────────────────────────
+function clearWatchlist(){
+  if(STATE._wlAbort){ STATE._wlAbort.abort(); STATE._wlAbort=null; }
+  STATE._wlRun++;   // any lookup still in flight now belongs to a dead run
+  STATE._watchlist=null; STATE._wlShowAll=false;
+}
+
+async function importWatchlistFiles(files){
+  try{
+    let rows=[];
+    for(const file of Array.from(files||[])){
+      if(file.size>25*1024*1024) throw new Error('That file is too large (>25 MB).');
+      rows=rows.concat(parseWatchlistCSV(await file.text()));
+    }
+    rows=dedupeWatchlist(rows);
+    if(!rows.length){ showToast('No films found in that file'); return; }
+    setWatchlist(rows);
+  }catch(e){ showToast(e.message||'Could not read that watchlist'); }
+}
+
+// Same two tiers as the library: the built-in DB instantly, then TMDB for what it
+// lacks and for anything new enough that the snapshot may hold a namesake.
+async function setWatchlist(films){
+  clearWatchlist();
+  const run=STATE._wlRun;
+  const wl={films,data:{},pending:false,progress:''};
+  STATE._watchlist=wl; STATE.recSource='watchlist';
+  const seenIdx=librarySeenIndex(), edge=dbSnapshotYear(), todo=[];
+  for(const f of films){
+    if(isSeenIn(seenIdx,f)) continue;             // won't be ranked, so don't look it up
+    const r=lookupFromDB(f)||lookupFuzzyFromDB(f);
+    if(r) wl.data[f.name+'||'+f.year]=r;
+    // TMDB matching leans on the year, so undated entries can't be looked up
+    if(Number.isFinite(f.year)&&(!r||f.year>=edge)) todo.push(f);
+  }
+  const key=getKey('tmdb');
+  if(key&&todo.length){
+    wl.pending=true;
+    wl.progress=`Looking up ${todo.length} film${todo.length!==1?'s':''} on TMDB…`;
+  }
+  renderRecsPanel();
+  if(!wl.pending) return;
+  STATE._wlAbort=new AbortController();
+  try{
+    const t=await fetchCrewTMDB(todo,key,(pct,msg)=>{
+      if(run!==STATE._wlRun) return;
+      wl.progress=msg;
+      const el=document.getElementById('wl-progress'); if(el) el.textContent=msg;
+    },STATE._wlAbort.signal);
+    if(run===STATE._wlRun&&t) Object.assign(wl.data,t);
+  }catch(e){
+    if(run===STATE._wlRun&&e.name!=='AbortError')
+      showToast(/Invalid TMDB/.test(e.message)?'Invalid TMDB API key — check ⚙ Setup':'Some watchlist lookups failed');
+  }finally{
+    if(run===STATE._wlRun){ wl.pending=false; wl.progress=''; STATE._wlAbort=null; renderRecsPanel(); }
+  }
+}
+
+function removeWatchlist(){ clearWatchlist(); renderRecsPanel(); }
+
+function setRecSource(src){
+  STATE.recSource=src==='watchlist'?'watchlist':'directors';
+  renderRecsPanel();
+}
+
+// Sliders live outside #wl-list, so dragging one repaints the ranking without
+// replacing the slider mid-drag.
+let _wlTimer;
+function onWlWeight(k,val){
+  WL_WEIGHTS[k]=Math.max(0,Math.min(100,parseInt(val,10)||0));
+  const lbl=document.getElementById('lbl-wl-'+k); if(lbl) lbl.textContent=WL_WEIGHTS[k];
+  clearTimeout(_wlTimer);
+  _wlTimer=setTimeout(()=>{ const el=document.getElementById('wl-list'); if(el) el.innerHTML=watchlistListHTML(); },60);
+}
+function resetWlWeights(){ WL_WEIGHTS=Object.assign({},WL_WEIGHTS_DEFAULT); renderRecsPanel(); }
+function showAllWatchlist(){ STATE._wlShowAll=true; const el=document.getElementById('wl-list'); if(el) el.innerHTML=watchlistListHTML(); }
+
+// ─── Watchlist rendering ──────────────────────────────────────────────────────
+function rankWatchlist(){
+  const wl=STATE._watchlist;
+  const out={ranked:[],seen:0,unmatched:[],hiddenByGenre:0};
+  if(!wl) return out;
+  const taste=buildTasteProfile(), seenIdx=librarySeenIndex(), ag=STATE._activeGenre;
+  out.gMean=taste.gMean;
+  for(const f of wl.films){
+    if(isSeenIn(seenIdx,f)){ out.seen++; continue; }
+    const d=wl.data[f.name+'||'+f.year];
+    if(!d){ out.unmatched.push(f); continue; }
+    if(ag&&!(d.genres||[]).includes(ag)){ out.hiddenByGenre++; continue; }
+    out.ranked.push({f,d,s:scoreWatchlistFilm(d,taste)});
+  }
+  out.ranked.sort((a,b)=>b.s.total-a.s.total||(b.d.voteAvg||0)-(a.d.voteAvg||0));
+  return out;
+}
+
+function wlPersonTip(role,name,e,gMean){
+  return e.rated
+    ? `${role} ${name}: you've rated ${e.rated} of their films, averaging ★${e.avg.toFixed(2)} against your overall ★${gMean.toFixed(2)}${e.count>e.rated?`, and watched ${e.count-e.rated} more`:''}.`
+    : `${role} ${name}: you've watched ${e.count} of their films without rating them.`;
+}
+
+function wlCardHTML(x,i,gMean){
+  const {f,d,s}=x;
+  const col=s.match>=70?'#6fbf8f':s.match>=55?'#c8a840':'#8888aa';
+  const chip=(txt,c,tip)=>`<span title="${esc(tip||'')}" style="background:${c}14;border:1px solid ${c}33;color:${c};border-radius:20px;padding:2px 9px;font-size:10px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis">${txt}</span>`;
+  const pTxt=(icon,n,e)=>`${icon} ${esc(n)}${e.rated?` · ★${e.avg.toFixed(1)}`:''}`;
+  const chips=[];
+  // The last film standing between you and a 100% filmography — and its bonus
+  const dd=d.director?dirByName(d.director):null, cov=dd?getCoverage(dd):null;
+  if(cov&&cov.missing.length===1&&sameFilm(cov.missing[0],{t:normTitle(f.name),y:f.year}))
+    chips.push(chip(`🏁 Completes ${esc(d.director)}`,'#6fbf8f',`The only feature of ${d.director}'s you haven't seen${COMPLETION_BONUS?` — watching it earns the +${COMPLETION_BONUS} completion bonus`:''}.`));
+  if(s.dirE&&s.dirE.v>=0.2) chips.push(chip(pTxt('🎬',d.director,s.dirE),'#c8a840',wlPersonTip('Director',d.director,s.dirE,gMean)));
+  else if(s.dirE&&s.dirE.v<=-0.15) chips.push(chip(`🎬 ${esc(d.director)} · below your avg`,'#b07878',wlPersonTip('Director',d.director,s.dirE,gMean)));
+  s.writers.filter(w=>w.e.v>=0.2).slice(0,1).forEach(w=>chips.push(chip(pTxt('✍️',w.n,w.e),'#9fb0d0',wlPersonTip('Writer',w.n,w.e,gMean))));
+  s.actors.filter(a=>a.e.v>=0.2).slice(0,2).forEach(a=>chips.push(chip(pTxt('🎭',a.n,a.e),'#c0a0d0',wlPersonTip('Actor',a.n,a.e,gMean))));
+  s.genres.filter(g=>g.e.v>=0.25).slice(0,1).forEach(g=>chips.push(chip(`🎞 ${esc(g.n)}`,'#80b0b0',
+    `${g.n}: ${Math.round(g.e.share*100)}% of your library${g.e.rated?`, rated ★${g.e.avg.toFixed(2)} on average`:''}.`)));
+  if(d.voteAvg>=3.75) chips.push(chip(`★${d.voteAvg.toFixed(1)} on TMDB`,'#8888aa','Community rating on TMDB, on a 5-star scale.'));
+  const meta=[Number.isFinite(f.year)?String(f.year):'', d.director?'dir. '+esc(d.director):'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
+  const W=WL_AXES.map(a=>`${a.label} ${s.ax[a.k]>=0?'+':''}${s.ax[a.k].toFixed(2)}`).join(', ');
+  const lb=f.uri||`https://letterboxd.com/search/films/${encodeURIComponent(f.name)}/`;
+  return `<div class="card" style="border:1px solid ${col}22">
+    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+      <span class="mono" style="color:#777787;font-size:11px;flex-shrink:0;padding-top:3px">${String(i+1).padStart(2,'0')}</span>
+      <div style="flex:1;min-width:0">
+        <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(f.name)}</div>
+        <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${meta}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0" title="${esc('Match: 50 is neutral. Each axis runs from -1 to +1 — '+W+'.')}">
+        <div class="mono" style="color:${col};font-size:18px;font-weight:bold;line-height:1">${s.match}</div>
+        <div style="color:#777787;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-top:3px">match</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${chips.length?chips.join(''):'<span style="color:#777787;font-size:10px">No strong signals either way</span>'}</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <a href="${esc(lb)}" target="_blank" rel="noopener noreferrer" style="color:${col};font-size:11px;text-decoration:none;border-bottom:1px solid ${col}44">Letterboxd →</a>
+      ${justWatchLinkHTML(f.name,col)}
+    </div>
+  </div>`;
+}
+
+function watchlistListHTML(ranked){
+  const wl=STATE._watchlist;
+  if(!wl) return '';
+  const r=ranked||rankWatchlist();
+  const parts=[];
+  if(!r.ranked.length){
+    parts.push(`<div style="text-align:center;padding:50px 0;color:#7d7d94;font-size:14px">${
+      wl.pending?'Ranking as soon as the lookups finish…'
+      :r.hiddenByGenre?`Nothing on your watchlist in ${esc(STATE._activeGenre)}.`
+      :"Nothing left to rank — you've seen everything on this watchlist we could identify."}</div>`);
+  } else {
+    const shown=STATE._wlShowAll?r.ranked:r.ranked.slice(0,WL_SHOWN);
+    parts.push(`<div class="dir-grid">${shown.map((x,i)=>wlCardHTML(x,i,r.gMean)).join('')}</div>`);
+    if(shown.length<r.ranked.length)
+      parts.push(`<div style="text-align:center;margin-top:18px"><button class="btn-ghost btn-sm" onclick="showAllWatchlist()">Show all ${r.ranked.length}</button></div>`);
+  }
+  if(r.unmatched.length&&!wl.pending){
+    parts.push(`<details style="margin-top:26px;color:#9595aa;font-size:12px">
+      <summary style="cursor:pointer">${r.unmatched.length} film${r.unmatched.length!==1?'s':''} couldn't be ranked — no cast or crew data${getKey('tmdb')?'':' (add a free TMDB key in ⚙ Setup to look them up)'}</summary>
+      <div style="margin-top:10px">${r.unmatched.map(f=>`<div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-bottom:1px solid #14141f">
+        <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${Number.isFinite(f.year)?f.year:'—'}</span>
+        <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(f.name)}</span>${justWatchLinkHTML(f.name,'#9a9ab4','small')}</div>`).join('')}</div>
+    </details>`);
+  }
+  return parts.join('');
+}
+
+function watchlistBodyHTML(){
+  const wl=STATE._watchlist;
+  const input=`<input id="wl-file-input" type="file" accept=".csv" multiple class="sr-only" onchange="importWatchlistFiles(this.files);this.value=''"/>`;
+  if(!wl){
+    return `<div style="max-width:600px">
+      ${input}
+      <label class="drop-zone" for="wl-file-input" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="event.preventDefault();this.classList.remove('drag');importWatchlistFiles(event.dataTransfer.files)">
+        <div style="font-size:26px;margin-bottom:10px" aria-hidden="true">📋</div>
+        <div style="color:#e0d8c8;font-size:15px;margin-bottom:4px">Drop your watchlist.csv here or click to browse</div>
+        <div style="color:#8c8ca2;font-size:12px">It's in your Letterboxd export, next to diary.csv · any Letterboxd list export works too</div>
+      </label>
+      <p style="color:#9595aa;font-size:12px;line-height:1.7;margin-top:14px">
+        Each film is ranked by how its director, writers, top-billed cast and genres have landed with you before, plus its TMDB rating.
+        Anything you've already logged is left out.
+      </p>
+    </div>`;
+  }
+  const r=rankWatchlist();
+  const stats=[`<b style="color:#c8c0b0">${wl.films.length}</b> on the list`,
+    wl.pending?'':`<b style="color:#c8c0b0">${r.ranked.length}</b> ranked`,
+    r.seen?`${r.seen} already seen`:'',
+    r.hiddenByGenre?`${r.hiddenByGenre} outside ${esc(STATE._activeGenre)}`:'',
+    r.unmatched.length&&!wl.pending?`${r.unmatched.length} without data`:''].filter(Boolean).join(' · ');
+  const sliders=WL_AXES.map(a=>`<div class="slider-group" style="min-width:110px;flex:1">
+      <label class="slider-label" for="sl-wl-${a.k}">${a.icon} ${a.label} <span id="lbl-wl-${a.k}" class="slider-val">${WL_WEIGHTS[a.k]}</span></label>
+      <input type="range" min="0" max="100" step="5" value="${WL_WEIGHTS[a.k]}" id="sl-wl-${a.k}" class="wslider" oninput="onWlWeight('${a.k}',this.value)"/>
+    </div>`).join('');
+  return `${input}
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <div style="color:#9595aa;font-size:12px;flex:1;min-width:200px">${stats}</div>
+      <label for="wl-file-input" class="btn-ghost btn-sm" style="cursor:pointer">↑ Replace</label>
+      <button class="btn-ghost btn-sm" onclick="removeWatchlist()" style="color:#9a7878;border-color:#2a1a1a">Remove</button>
+    </div>
+    ${wl.pending?`<div style="display:flex;align-items:center;gap:10px;background:#0c0c18;border:1px solid #1e1e2e;border-radius:8px;padding:9px 14px;margin-bottom:14px">
+      <div class="spinner" style="width:14px;height:14px;border-width:2px;margin:0"></div>
+      <div id="wl-progress" role="status" style="color:#a9a9bc;font-size:12px">${esc(wl.progress)}</div></div>`:''}
+    <div style="background:#0a0a14;border:1px solid #1a1a2a;border-radius:10px;padding:12px 16px;margin-bottom:22px">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+        <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase">What matters most</span>
+        <div style="flex:1"></div>
+        <button onclick="resetWlWeights()" style="background:none;border:none;color:#8c8ca2;font-family:inherit;font-size:11px;cursor:pointer;text-decoration:underline">Reset</button>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap">${sliders}</div>
+    </div>
+    <div id="wl-list">${watchlistListHTML(r)}</div>`;
 }
 
 function filterCat(cat){
@@ -2611,7 +3115,7 @@ function reScoreAndRender(){
       STATE._conformity=computeConformity(STATE._films,STATE._filmData);
     }
   }
-  STATE.directors=computeScores(STATE._byDir,STATE._globalMean);
+  STATE.directors=scoreDirectors(STATE._byDir,STATE._globalMean);
   STATE.writers=computeScores(STATE._byWriter,STATE._globalMean);
   STATE.actors=computeScores(STATE._byActor,STATE._globalMean);
   renderResults();
@@ -2621,6 +3125,8 @@ function reScoreAndRender(){
 // so they skip re-scoring and just repaint the bars (which keeps search/sort state).
 function refreshAllCoverage(){
   _covCache=null;   // the feature definition changed, so every figure is stale
+  // ...unless it moved someone across 100%, which changes the ranking itself
+  if(completionOutOfDate()){ reScoreAndRender(); if(_filmogModalName) renderFilmogModal(); return; }
   document.querySelectorAll('.cov-block').forEach(el=>{
     el.innerHTML=coverageInnerHTML(el.dataset.person,el.dataset.ac||'#c8a840');
   });
@@ -2634,6 +3140,11 @@ function onCountDocs(on){ COUNT_DOCS=!!on; refreshAllCoverage(); }
 
 function onSettingSlider(key, val){
   const v=parseInt(val);
+  if(key==='completionBonus'){
+    setCompletionBonusUI(v);
+    if(STATE.directors.length) scheduleRender();
+    return;
+  }
   if(key==='minRuntime'){
     MIN_RUNTIME=v;
     document.getElementById('lbl-minRuntime').textContent=v+' min';   // label stays instant
@@ -2915,7 +3426,10 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
         <b style="color:#c8c0b0">Click the bar</b> to see exactly which films you're missing, listed by year.
         Hit <b style="color:#c8c0b0">⟳ Exact filmography</b> there (or on the directors panel, for the top four)
         to pull the complete credits from TMDB — that needs a free API key, and the result is cached for next time.
-        It's a coverage measure only; it does not affect scoring or ranking.
+        Coverage feeds the score in exactly one way: once you've seen <b style="color:#c8c0b0">every</b> feature,
+        the director earns a small <b style="color:#c8c0b0">🏁 100% bonus</b> (+3 points by default, adjustable or
+        switchable off under ⚖ Settings). It's flat rather than proportional, so it settles close calls without
+        vaulting someone past a director you clearly rate higher.
       </div>
     </div>
 
@@ -2929,6 +3443,15 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
         The four modes are just different weightings of those same three, so each one still mixes directors you
         love with filmographies you're close to closing out. Nothing here is scored on films you haven't watched,
         so the wider your filmography data, the better it gets.
+      </div>
+      <div style="color:#b2b2c4;font-size:13px;line-height:1.8;margin-top:10px">
+        Switch to <b style="color:#c8c0b0">📋 My watchlist</b> and upload <b style="color:#c8c0b0">watchlist.csv</b> from your
+        export (or any Letterboxd list) to rank the films you've already picked out. Each is scored on how its
+        <b style="color:#c8c0b0">director</b>, <b style="color:#c8c0b0">writers</b>, top-billed <b style="color:#c8c0b0">actors</b>
+        and <b style="color:#c8c0b0">genres</b> have landed with you — how far above your own average you rate them,
+        shrunk toward neutral when you've only seen one or two, with a little credit for how often you seek them out —
+        plus its TMDB rating. The sliders set how much each one counts. <b style="color:#c8c0b0">Where to watch</b> links
+        open a JustWatch search for the film in your country.
       </div>
     </div>
 
