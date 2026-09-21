@@ -31,6 +31,7 @@ input,select,button{font-family:inherit}
 .input-field{background:#111120;border:1px solid #222238;color:#e0d8c8;border-radius:8px;padding:12px 16px;font-size:14px;outline:none;transition:border-color .15s;width:100%}
 .input-field:focus{border-color:#c8a84066}
 .card{background:linear-gradient(150deg,#141420,#0e0e18);border-radius:10px;padding:18px 20px;position:relative;overflow:hidden}
+body.no-posters .poster{display:none}
 .progress-bar{background:#0e0e1c;border-radius:100px;height:4px;overflow:hidden}
 .progress-fill{background:linear-gradient(90deg,#6a5010,#c8a840);height:100%;border-radius:100px;transition:width .3s ease}
 .drop-zone{display:block;border:2px dashed #252535;border-radius:14px;padding:40px 20px;text-align:center;cursor:pointer;background:#0c0c1a;transition:border-color .2s,background .2s}
@@ -409,12 +410,46 @@ function parseDBEntry(entry){
 const POSTER_RE=/^\/[A-Za-z0-9_-]{6,80}\.(jpg|png|webp)$/;
 const POSTER_BASE='https://image.tmdb.org/t/p/';
 function posterURL(path,size){ return POSTER_RE.test(String(path||''))?POSTER_BASE+(size||'w154')+path:''; }
-// A small poster for a card row; an empty placeholder keeps the row aligned when there is none.
-function posterHTML(path,title,w){
+// A small poster for a card row. Posters come with the built-in database (and
+// with TMDB lookups), so a database built before them, a session remembered from
+// one, or a network that blocks image.tmdb.org leaves a page with none — and a
+// column of empty boxes looked broken. Each section decides once whether any of
+// its films has a poster: none → `show` is false and the column is left out
+// entirely, the layout from before posters; some → the rows without one get a
+// quiet monogram tile so the column still lines up.
+function posterHTML(path,title,w,show){
+  if(show===false) return '';
   w=w||40;
-  const u=posterURL(path,w>60?'w185':'w92');
-  return u?`<img src="${esc(u)}" alt="" loading="lazy" width="${w}" height="${Math.round(w*1.5)}" style="width:${w}px;height:${Math.round(w*1.5)}px;object-fit:cover;border-radius:4px;flex-shrink:0;background:#14141f"/>`
-          :`<span aria-hidden="true" style="display:inline-block;width:${w}px;height:${Math.round(w*1.5)}px;border-radius:4px;flex-shrink:0;background:#14141f"></span>`;
+  const h=Math.round(w*1.5), u=posterURL(path,w>60?'w185':'w92');
+  return u?`<img class="poster" src="${esc(u)}" alt="" loading="lazy" width="${w}" height="${h}" data-t="${esc(String(title||'').slice(0,80))}" onload="posterLoaded()" onerror="posterFailed(this)" style="width:${w}px;height:${h}px;object-fit:cover;border-radius:4px;flex-shrink:0;background:#14141f"/>`
+          :posterTileHTML(title,w);
+}
+// The film's initial (past a leading article) on a faint tile, in place of a
+// poster the row lacks while its neighbours have one.
+function posterTileHTML(title,w){
+  w=w||40;
+  const h=Math.round(w*1.5), t=String(title||'').replace(/^(the|a|an)\s+/i,'').trim();
+  const ch=t?t.charAt(0).toUpperCase():'·';
+  return `<span class="poster" aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:${w}px;height:${h}px;border-radius:4px;flex-shrink:0;background:#0f0f1c;border:1px solid #1e1e30;color:#40405c;font-family:'Playfair Display',Georgia,serif;font-style:italic;font-size:${Math.max(9,Math.round(w*0.5))}px;line-height:1">${esc(ch)}</span>`;
+}
+// Does any of these have a poster? `get` picks the path off an item (default: its .poster).
+function anyPoster(items,get){
+  get=get||(x=>x&&x.poster);
+  for(const x of items||[]) if(POSTER_RE.test(String(get(x)||''))) return true;
+  return false;
+}
+// The poster of a film in the library, from the lookup data behind it.
+function filmPosterOf(f){ const x=STATE._filmData&&STATE._filmData[f.name+'||'+f.year]; return x?x.poster:null; }
+// A poster that would not load becomes a tile. When several fail and none has
+// loaded, image.tmdb.org is unreachable (offline, or blocked by a content
+// filter), so the poster column is hidden page-wide rather than filled with tiles.
+let _posterOk=0,_posterFails=0;
+function posterLoaded(){ _posterOk++; if(_posterOk===1) document.body.classList.remove('no-posters'); }
+function posterFailed(img){
+  _posterFails++;
+  const t=document.createElement('template'); t.innerHTML=posterTileHTML(img.dataset.t,img.width||40);
+  img.replaceWith(t.content.firstChild);
+  if(!_posterOk&&_posterFails>=4) document.body.classList.add('no-posters');
 }
 
 function lookupFromDB(film){
@@ -511,7 +546,8 @@ const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   _activeGenre:null, _activeDecade:null, _filmog:{}, recMode:'balanced',
   _diary:[], _history:null, _ratedOn:{},
   recSource:'directors', _watchlist:null, _wlAbort:null, _wlRun:0, _wlShowAll:false,
-  wlMaxRuntime:0, _lastPick:null, recPeople:true, wlStreamOnly:false };
+  wlMaxRuntime:0, _lastPick:null, recPeople:true, wlStreamOnly:false,
+  _ownedShowAll:false, _ownedPending:0 };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -1169,7 +1205,8 @@ function applySavedData(d){
   if(d.wlWeights&&typeof d.wlWeights==='object')
     WL_AXES.forEach(a=>{ const v=Number(d.wlWeights[a.k]); if(Number.isFinite(v)&&v>=0&&v<=100) WL_WEIGHTS[a.k]=v; });
   if(d.recMode&&REC_MODES[d.recMode]) STATE.recMode=d.recMode;
-  if(d.recSource==='directors'||d.recSource==='watchlist') STATE.recSource=d.recSource;
+  if(d.recSource==='directors'||d.recSource==='watchlist'||d.recSource==='owned') STATE.recSource=d.recSource;
+  mergeOwned(d.owned);
   if(WL_RUNTIMES.includes(d.wlMaxRuntime)) STATE.wlMaxRuntime=d.wlMaxRuntime;
   if(typeof d.recPeople==='boolean') STATE.recPeople=d.recPeople;
   if(typeof d.wlStreamOnly==='boolean') STATE.wlStreamOnly=d.wlStreamOnly;
@@ -1523,7 +1560,7 @@ async function forgetSession(){
   try{
     for(const k of Object.keys(localStorage)) if(k.startsWith('cmr_')) localStorage.removeItem(k);
   }catch(e){}
-  _prov=null; SERVICES={}; _regionOverride=null; _jwLocale=null; STATE._filmog={};
+  _prov=null; SERVICES={}; _regionOverride=null; _jwLocale=null; STATE._filmog={}; _owned=null;
   const ki=document.getElementById('tmdb-key-input'); if(ki) ki.value='';
   const kb=document.getElementById('tmdb-saved-badge'); if(kb) kb.style.display='none';
   updateConfigBadge();
@@ -1598,6 +1635,8 @@ function buildSavePayload(){
     ratedOn:STATE._ratedOn||{},
     // Watchlist plus its lookups, so a reload doesn't repeat the TMDB pass
     watchlist:STATE._watchlist?{films:STATE._watchlist.films,data:STATE._watchlist.data}:null,
+    // The owned-films list lives in this browser on its own; a save file carries a copy
+    owned:ownedList().films.length?{films:ownedList().films,data:ownedList().data}:null,
     weights:Object.assign({},WEIGHTS),
     wlWeights:Object.assign({},WL_WEIGHTS),
     recMode:STATE.recMode, recSource:STATE.recSource, wlMaxRuntime:STATE.wlMaxRuntime, recPeople:STATE.recPeople, wlStreamOnly:STATE.wlStreamOnly,
@@ -2174,10 +2213,9 @@ function renderFilmogModal(){
   const exact=cov.source==='tmdb', hasKey=!!getKey('tmdb'), loading=_refiningNames.has(name);
   const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
   const row=(year,title,right,mid,poster)=>`<div style="display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #14141f">
-      ${posterHTML(poster,title,26)}
+      ${posterHTML(poster,title,26,sp)}
       <span class="mono" style="color:#83839b;font-size:11px;flex-shrink:0;width:36px">${Number.isFinite(year)?year:'—'}</span>
       <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(title)}</span>${mid||''}${right||''}</div>`;
-  const fdPoster=f=>{ const x=STATE._filmData&&STATE._filmData[f.name+'||'+f.year]; return x?x.poster:null; };
 
   // "Hours to complete" is the headline, so each unseen film shows its runtime;
   // and the list can be ordered by year or by how well the film is regarded.
@@ -2197,6 +2235,7 @@ function renderFilmogModal(){
   // seenList is the filtered set the percentage was actually computed from, so the
   // two sections below always add up to the fraction in the header
   const seenFilms=[...(cov.seenList||d.films||[])].sort((a,b)=>a.year-b.year);
+  const sp=anyPoster(missing)||anyPoster(seenFilms,filmPosterOf);
   const source=exact
     ? `<span style="color:#4a9a4a">✓ Exact — released films they directed, from TMDB${cov.truncated?`, capped at the ${FILMOG_MAX_CREDITS} best-known credits`:''}.</span>`
     : `<span style="color:#998870">≈ Estimated from the built-in database of ${Object.keys(FILM_DB).length.toLocaleString()} popular films. It holds their best-known work, so the real filmography is usually larger and this list is incomplete.</span>`;
@@ -2239,7 +2278,7 @@ function renderFilmogModal(){
       <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Seen <span style="color:#8c8ca2">(${seenFilms.length})</span></div>
       ${seenFilms.map(f=>row(f.year,f.name,f.rating>0
         ? `<span style="color:#c8a840;font-size:11px;flex-shrink:0">${stars(f.rating)}</span>`
-        : `<span style="color:#7d7d94;font-size:11px;flex-shrink:0">watched</span>`,'',fdPoster(f))).join('')}
+        : `<span style="color:#7d7d94;font-size:11px;flex-shrink:0">watched</span>`,'',filmPosterOf(f))).join('')}
     </div>`;
 }
 
@@ -2260,16 +2299,18 @@ function pipsHTML(val,col){let h='<div style="display:flex;gap:2px;align-items:c
 
 // "+0.62" / "−0.15" for the card stats
 function signed(v){ v=Number(v)||0; return (v<0?'−':'+')+Math.abs(v).toFixed(2); }
-function personCardHTML(d,rank,cat){
+// The three films a person's card lists: their best, then anything watched but unrated.
+function cardFilms(d){ return [...d.topFilms,...d.films.filter(f=>f.rating===0)].slice(0,3); }
+// `showPosters` is decided once per grid of cards, so the cards line up with each other.
+function personCardHTML(d,rank,cat,showPosters){
   const ac=rank<=4?RANK_COLORS[rank-1]:'#557799';
   const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
-  const watchedUnrated=d.films.filter(f=>f.rating===0);
-  const displayFilms=[...d.topFilms,...watchedUnrated].slice(0,3);
+  const displayFilms=cardFilms(d);
+  const sp=showPosters!==undefined?showPosters:anyPoster(displayFilms,filmPosterOf);
   let topFilms='';
-  const posterOf=f=>{ const x=STATE._filmData&&STATE._filmData[f.name+'||'+f.year]; return x?x.poster:null; };
   for(const f of displayFilms){
     const label=f.rating>0?`<span style="color:${ac};font-size:10px;margin-left:8px;flex-shrink:0">${stars(f.rating)}</span>`:`<span style="color:#7d7d94;font-size:10px;margin-left:8px;flex-shrink:0">watched</span>`;
-    topFilms+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">${posterHTML(posterOf(f),f.name,22)}<span style="color:#c8c0ae;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(f.name)}</span>${label}</div>`;
+    topFilms+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">${posterHTML(filmPosterOf(f),f.name,22,sp)}<span style="color:#c8c0ae;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(f.name)}</span>${label}</div>`;
   }
   return `<div class="card" style="border:1px solid ${ac}28">
     <div style="position:absolute;top:0;left:10%;right:10%;height:2px;background:linear-gradient(90deg,transparent,${ac}aa,transparent)"></div>
@@ -2345,7 +2386,8 @@ function renderCategoryPanel(cat){
   // Search/sort state per category survives a re-render (see catUI)
   const searchId=`search-${cat}`, sortId=`sort-${cat}`, ui=catUI(cat);
 
-  const top4CardsHTML=top4.map((d,i)=>personCardHTML(d,i+1,cat)).join('');
+  const top4Posters=anyPoster(top4.flatMap(cardFilms),filmPosterOf);
+  const top4CardsHTML=top4.map((d,i)=>personCardHTML(d,i+1,cat,top4Posters)).join('');
   const alsoHTML=data.slice(4,14).map((d,i)=>`<div class="also-chip"><span style="color:#7d7d94;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(d.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</span></div>`).join('');
 
   return `
@@ -2437,10 +2479,11 @@ function blindSpotsHTML(){
   if(!STATE._films) return '';
   const b=blindSpots();
   if(!b.genres.length&&!b.decades.length) return '';
+  const sp=anyPoster([...b.genres,...b.decades].flatMap(s=>s.unseen.slice(0,3)));
   const row=s=>`<div style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:10px;padding:12px 14px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px"><span style="color:#f0e8d8;font-size:13px;font-weight:bold">${esc(s.label)}</span><span class="mono" title="of the ${s.total} most popular" style="color:${s.pct<25?'#c85040':s.pct<50?'#c8a840':'#6fbf8f'};font-size:12px">${s.seen} / ${s.total}</span></div>
     <div style="height:3px;background:#1a1a2a;border-radius:2px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${s.pct}%;background:#c8a840;border-radius:2px"></div></div>
-    <div style="display:flex;flex-direction:column;gap:5px">${s.unseen.slice(0,3).map(f=>`<div style="display:flex;gap:8px;align-items:center">${posterHTML(f.poster,f.title,22)}<span style="color:#c8c0ae;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.title)} <span style="color:#7d7d94">${f.y}</span></span>${justWatchLinkHTML(f.title,'#9a9ab4','small')}</div>`).join('')}</div>
+    <div style="display:flex;flex-direction:column;gap:5px">${s.unseen.slice(0,3).map(f=>`<div style="display:flex;gap:8px;align-items:center">${posterHTML(f.poster,f.title,22,sp)}<span style="color:#c8c0ae;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.title)} <span style="color:#7d7d94">${f.y}</span></span>${justWatchLinkHTML(f.title,'#9a9ab4','small')}</div>`).join('')}</div>
   </div>`;
   const grid=(title,list)=>list.length?`<div style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin:14px 0 8px">${title}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${list.slice(0,BLIND_SHOWN).map(row).join('')}</div>`:'';
@@ -2461,6 +2504,7 @@ function letterboxdListCSV(rows){
 function exportLetterboxdList(kind){
   let rows=[], name='';
   if(kind==='watchlist'){ rows=rankWatchlist().ranked.map(x=>({title:x.f.name,year:x.f.year,tmdbId:x.d.tmdbId})); name='watchlist-ranked'; }
+  else if(kind==='owned'){ rows=rankOwned().ranked.map(x=>({title:x.f.name,year:x.f.year,tmdbId:x.d.tmdbId})); name='collection-ranked'; }
   else { rows=buildRecommendations(STATE.recMode).map(r=>({title:r.title,year:r.year,tmdbId:r.d&&r.d.tmdbId})); name='watch-next-'+STATE.recMode; }
   if(!rows.length){ showToast('Nothing to export yet'); return; }
   triggerDownload(`${STATE.userName||'my'}-${name}.csv`,'text/csv',letterboxdListCSV(rows));
@@ -2658,7 +2702,7 @@ function resetProviders(){
 
 function scheduleWlListRender(){
   clearTimeout(_provRerender);
-  _provRerender=setTimeout(()=>{ const el=document.getElementById('wl-list'); if(el){ el.innerHTML=watchlistListHTML(); hydrateProviders(); } else renderRecsPanel(); },300);
+  _provRerender=setTimeout(()=>{ if(!repaintWlList()) renderRecsPanel(); },300);
 }
 
 function providerLineHTML(p,k){
@@ -2700,7 +2744,7 @@ function hydrateProviders(){
     items.push({title:el.dataset.t,year:Number.isFinite(y)?y:null,tmdbId:parseInt(el.dataset.id,10)||null});
   });
   // Filtering to your services needs an answer for every film, not just the visible ones
-  if(STATE.wlStreamOnly&&STATE._watchlist&&STATE.currentCat==='recs') items.push(...(STATE._wlAwaiting||[]));
+  if(STATE.wlStreamOnly&&STATE._watchlist&&STATE.currentCat==='recs'&&STATE.recSource==='watchlist') items.push(...(STATE._wlAwaiting||[]));
   queueProviders(items);
 }
 
@@ -2903,7 +2947,7 @@ function setRecMode(mode){
   renderRecsPanel();
 }
 
-function recCardHTML(r,i,gMean){
+function recCardHTML(r,i,gMean,showPosters){
   const ac=r.dirRank&&r.dirRank<=4?RANK_COLORS[r.dirRank-1]:'#557799';
   const chip=(txt,col,tip)=>`<span title="${esc(tip||'')}" style="background:${col}14;border:1px solid ${col}33;color:${col};border-radius:20px;padding:2px 9px;font-size:10px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis">${txt}</span>`;
   const chips=[];
@@ -2921,7 +2965,7 @@ function recCardHTML(r,i,gMean){
   return `<div class="card" style="border:1px solid ${ac}22">
     <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:6px">
       <span class="mono" style="color:#777787;font-size:11px;flex-shrink:0;padding-top:3px">${String(i+1).padStart(2,'0')}</span>
-      ${posterHTML(r.poster,r.title,40)}
+      ${posterHTML(r.poster,r.title,40,showPosters)}
       <div style="flex:1;min-width:0">
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(r.title)}</div>
         <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${[Number.isFinite(r.year)?r.year:'—',r.director?esc(r.director):'',r.runtime?fmtDuration(r.runtime):''].filter(Boolean).join(' · ')}</div>
@@ -2947,7 +2991,8 @@ function renderRecsPanel(){
   if(!el) return;
   schedulePersist();   // watchlist, its lookups and fetched filmographies all end up here
   const mode=STATE.recMode, w=REC_MODES[mode]||REC_MODES.balanced;
-  const onWl=STATE.recSource==='watchlist', wl=STATE._watchlist, un=STATE.userName;
+  const onWl=STATE.recSource==='watchlist', onOwn=STATE.recSource==='owned', wl=STATE._watchlist, un=STATE.userName;
+  const ownN=ownedList().films.length;
   const src=(k,label)=>{
     const on=STATE.recSource===k;
     return `<button onclick="setRecSource('${k}')" aria-pressed="${on}" style="background:${on?'#1c1c30':'transparent'};border:none;color:${on?'#f0e8d8':'#9595aa'};border-radius:7px;padding:7px 14px;cursor:pointer;font-family:inherit;font-size:12px;transition:all .15s">${label}</button>`;
@@ -2955,18 +3000,23 @@ function renderRecsPanel(){
   const header=`
     <div style="margin-bottom:16px">
       <div class="eyebrow" style="margin-bottom:5px">🍿 What to Watch Next</div>
-      <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(onWl
+      <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(onOwn
+        ? (un?un+"'s":'Your')+' Collection, Ranked'
+        : onWl
         ? (un?un+"'s":'Your')+' Watchlist, Ranked'
         : 'Unseen From '+(un?un+"'s":'Your')+' Favorites')}</h1>
-      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">${onWl
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">${onOwn
+        ? "Films you own but haven't watched yet, ranked the same way as your watchlist. It's kept in this browser, apart from your Letterboxd export."
+        : onWl
         ? 'Your Letterboxd watchlist, ordered by how well each film fits the directors, writers, actors and genres you rate highest.'
         : "Unseen films by the directors, actors and writers you rate highest — scored on your whole taste, weighted toward the filmographies you're closest to finishing."}</p>
     </div>
     <div role="group" aria-label="Recommend from" style="display:inline-flex;gap:3px;background:#0c0c18;border:1px solid #1e1e2e;border-radius:10px;padding:3px;margin-bottom:16px;flex-wrap:wrap">
-      ${src('directors','🎬 From people you love')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}
+      ${src('directors','🎬 From people you love')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}${src('owned','📀 My collection'+(ownN?` <span class="mono" style="color:#c8a840">${ownN}</span>`:''))}
     </div>`;
 
   if(onWl){ el.innerHTML=header+watchlistBodyHTML()+blindSpotsHTML(); hydrateProviders(); return; }
+  if(onOwn){ el.innerHTML=header+ownedBodyHTML(); return; }
 
   const tabs=Object.keys(REC_MODES).map(k=>{
     const m=REC_MODES[k], on=k===mode;
@@ -2998,7 +3048,8 @@ function renderRecsPanel(){
   }
   const gMean=buildTasteProfile().gMean;
   setTimeout(hydrateProviders,0);
-  el.innerHTML=header+modes+`<div class="dir-grid">${recs.map((r,i)=>recCardHTML(r,i,gMean)).join('')}</div>
+  const recPosters=anyPoster(recs);
+  el.innerHTML=header+modes+`<div class="dir-grid">${recs.map((r,i)=>recCardHTML(r,i,gMean,recPosters)).join('')}</div>
     <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-top:20px">
       <div style="color:#777787;font-size:11px;line-height:1.7;flex:1;min-width:240px">
         Drawn from ${STATE.directors.length} qualifying directors${STATE.recPeople?' plus the actors and writers you rate highest':''}. Coverage marked “est.” comes from the built-in database,
@@ -3166,7 +3217,7 @@ function setWlRuntime(m){
 // Choosing between forty good options is the problem this is for; the top of the
 // list is already the answer to "what fits my taste best".
 function surpriseMe(){
-  const r=rankWatchlist();
+  const owned=STATE.recSource==='owned', r=rankCurrent();
   const pool=r.ranked.slice(0,WL_PICK_POOL);
   if(!pool.length){ showToast('Nothing to pick from with these filters'); return; }
   const options=pool.length>1?pool.filter(x=>x.f.name+'||'+x.f.year!==STATE._lastPick):pool;
@@ -3174,8 +3225,8 @@ function surpriseMe(){
   STATE._lastPick=x.f.name+'||'+x.f.year;
   const body=document.getElementById('pick-modal-body');
   body.innerHTML=`<div class="eyebrow" style="margin-bottom:10px">🎲 Tonight's pick</div>
-    <div style="color:#9595aa;font-size:12px;margin-bottom:14px">Drawn at random from your top ${pool.length} match${pool.length!==1?'es':''}${STATE.wlMaxRuntime?` under ${fmtDuration(STATE.wlMaxRuntime)}`:''}${anyFilter()?` in ${esc(filterLabel())}`:''}${servicesPhrase()?' '+esc(servicesPhrase()):''}.</div>
-    ${wlCardHTML(x,r.ranked.indexOf(x),r.gMean)}
+    <div style="color:#9595aa;font-size:12px;margin-bottom:14px">Drawn at random from your top ${pool.length} match${pool.length!==1?'es':''}${owned?' in your collection':''}${STATE.wlMaxRuntime?` under ${fmtDuration(STATE.wlMaxRuntime)}`:''}${anyFilter()?` in ${esc(filterLabel())}`:''}${!owned&&servicesPhrase()?' '+esc(servicesPhrase()):''}.</div>
+    ${wlCardHTML(x,r.ranked.indexOf(x),r.gMean,!!x.d.poster,owned&&'modal')}
     <div style="display:flex;gap:10px;margin-top:16px">
       <button class="btn-gold btn-sm" onclick="surpriseMe()" ${pool.length>1?'':'disabled style="opacity:.5"'}>🎲 Pick another</button>
       <button class="btn-ghost btn-sm" onclick="closeModalEl('pick-modal')">Done</button>
@@ -3209,6 +3260,8 @@ function buildWatchlistCardSVG(posters){
   posters=posters||{};
   const r=rankWatchlist(), W=1080, H=1350, un=STATE.userName;
   const top=r.ranked.slice(0,WL_CARD_ROWS);
+  // No posters at all → the rows start where the poster column would have been
+  const withPosters=Object.keys(posters).length>0, tx=withPosters?240:156, nx=withPosters?188:104;
   const filt=[servicesPhrase(),STATE.wlMaxRuntime?'under '+fmtDuration(STATE.wlMaxRuntime):'',filterLabel()].filter(Boolean).join(' · ');
   const rows=top.map((x,i)=>{
     const y=300+i*112, {f,d,s}=x;
@@ -3217,11 +3270,12 @@ function buildWatchlistCardSVG(posters){
     const meta=[Number.isFinite(f.year)?f.year:'', d.director?'dir. '+d.director:'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
     const img=posters[f.name+'||'+f.year];
     return `${i?`<line x1="110" y1="${y-42}" x2="${W-110}" y2="${y-42}" stroke="#1a1a2e" stroke-width="2"/>`:''}
-      ${img?`<image href="${img}" x="104" y="${y-34}" width="62" height="93" preserveAspectRatio="xMidYMid slice"/>`:`<rect x="104" y="${y-34}" width="62" height="93" rx="4" fill="#14141f"/>`}
-      <text x="188" y="${y}" fill="#7d7d94" font-size="24" font-family="Georgia,serif">${String(i+1).padStart(2,'0')}</text>
-      <text x="240" y="${y}" fill="#f0e8d8" font-size="32" font-family="Georgia,serif" font-weight="bold">${esc(svgTrunc(f.name,30))}</text>
-      <text x="240" y="${y+32}" fill="#9595aa" font-size="19" font-family="Georgia,serif">${esc(svgTrunc(meta,54))}</text>
-      ${why.length?`<text x="240" y="${y+58}" fill="#c8a840" font-size="17" font-family="Georgia,serif">${esc(svgTrunc('Because you like '+why.join(', '),64))}</text>`:''}
+      ${img?`<image href="${img}" x="104" y="${y-34}" width="62" height="93" preserveAspectRatio="xMidYMid slice"/>`
+           :withPosters?`<rect x="104.5" y="${y-33.5}" width="61" height="92" rx="4" fill="#0f0f1c" stroke="#1e1e30"/>`:''}
+      <text x="${nx}" y="${y}" fill="#7d7d94" font-size="24" font-family="Georgia,serif">${String(i+1).padStart(2,'0')}</text>
+      <text x="${tx}" y="${y}" fill="#f0e8d8" font-size="32" font-family="Georgia,serif" font-weight="bold">${esc(svgTrunc(f.name,30))}</text>
+      <text x="${tx}" y="${y+32}" fill="#9595aa" font-size="19" font-family="Georgia,serif">${esc(svgTrunc(meta,54))}</text>
+      ${why.length?`<text x="${tx}" y="${y+58}" fill="#c8a840" font-size="17" font-family="Georgia,serif">${esc(svgTrunc('Because you like '+why.join(', '),64))}</text>`:''}
       <text x="${W-110}" y="${y+6}" text-anchor="end" fill="${col}" font-size="46" font-family="Georgia,serif" font-weight="bold">${s.match}</text>
       <text x="${W-110}" y="${y+32}" text-anchor="end" fill="#7d7d94" font-size="15" font-family="Georgia,serif" letter-spacing="3">MATCH</text>`;
   }).join('');
@@ -3241,7 +3295,7 @@ async function downloadWatchlistCard(){
 }
 
 function setRecSource(src){
-  STATE.recSource=src==='watchlist'?'watchlist':'directors';
+  STATE.recSource=src==='watchlist'||src==='owned'?src:'directors';
   renderRecsPanel();
 }
 
@@ -3253,26 +3307,36 @@ function onWlWeight(k,val){
   schedulePersist();
   const lbl=document.getElementById('lbl-wl-'+k); if(lbl) lbl.textContent=WL_WEIGHTS[k];
   clearTimeout(_wlTimer);
-  _wlTimer=setTimeout(()=>{ const el=document.getElementById('wl-list'); if(el){ el.innerHTML=watchlistListHTML(); hydrateProviders(); } },60);
+  _wlTimer=setTimeout(repaintWlList,60);
 }
 function resetWlWeights(){ WL_WEIGHTS=Object.assign({},WL_WEIGHTS_DEFAULT); renderRecsPanel(); }
-function showAllWatchlist(){ STATE._wlShowAll=true; const el=document.getElementById('wl-list'); if(el){ el.innerHTML=watchlistListHTML(); hydrateProviders(); } }
+function showAllWatchlist(){ if(STATE.recSource==='owned') STATE._ownedShowAll=true; else STATE._wlShowAll=true; repaintWlList(); }
+// #wl-list holds whichever ranked list is showing — the watchlist or the collection
+function repaintWlList(){
+  const el=document.getElementById('wl-list'); if(!el) return false;
+  el.innerHTML=STATE.recSource==='owned'?ownedListHTML():watchlistListHTML();
+  hydrateProviders();
+  return true;
+}
 
 // ─── Watchlist rendering ──────────────────────────────────────────────────────
-function rankWatchlist(){
-  const wl=STATE._watchlist;
-  const out={ranked:[],seen:0,unmatched:[],hiddenByGenre:0,hiddenByRuntime:0,hiddenByStream:0,awaiting:[]};
+function rankWatchlist(){ return rankList(STATE._watchlist,true); }
+function rankOwned(){ return rankList(ownedList(),false); }
+function rankCurrent(){ return STATE.recSource==='owned'?rankOwned():rankWatchlist(); }
+// `stream` is false for the collection: films you own need no streaming check
+function rankList(wl,stream){
+  const out={ranked:[],seen:0,seenFilms:[],unmatched:[],hiddenByGenre:0,hiddenByRuntime:0,hiddenByStream:0,awaiting:[]};
   if(!wl) return out;
   const taste=buildTasteProfile(), seenIdx=librarySeenIndex(), ag=STATE._activeGenre;
   out.gMean=taste.gMean;
   for(const f of wl.films){
-    if(isSeenIn(seenIdx,f)){ out.seen++; continue; }
+    if(isSeenIn(seenIdx,f)){ out.seen++; out.seenFilms.push(f); continue; }
     const d=wl.data[f.name+'||'+f.year];
     if(!d){ out.unmatched.push(f); continue; }
     if((ag&&!(d.genres||[]).includes(ag))||!inDecade(f.year)){ out.hiddenByGenre++; continue; }
     // An unknown runtime can't promise to fit the evening, so it sits out the filter
     if(STATE.wlMaxRuntime&&!(d.runtime>0&&d.runtime<=STATE.wlMaxRuntime)){ out.hiddenByRuntime++; continue; }
-    if(STATE.wlStreamOnly&&getKey('tmdb')){
+    if(stream&&STATE.wlStreamOnly&&getKey('tmdb')){
       const p=providerFor(f.name,f.year,d.tmdbId);
       if(!p){ out.awaiting.push({title:f.name,year:f.year,tmdbId:d.tmdbId||null}); continue; }
       if(!streamsOnMine(p)){ out.hiddenByStream++; continue; }
@@ -3280,7 +3344,7 @@ function rankWatchlist(){
     out.ranked.push({f,d,s:scoreWatchlistFilm(d,taste)});
   }
   out.ranked.sort((a,b)=>b.s.total-a.s.total||(b.d.voteAvg||0)-(a.d.voteAvg||0));
-  STATE._wlAwaiting=out.awaiting;
+  if(stream) STATE._wlAwaiting=out.awaiting;
   return out;
 }
 
@@ -3307,7 +3371,9 @@ function tasteChips(s,d,title,year,gMean,chip){
   return chips;
 }
 
-function wlCardHTML(x,i,gMean){
+// `owned` drops the streaming line and JustWatch link — it's already on your
+// shelf — and adds a remove button ('modal' leaves it out of the Surprise-me card).
+function wlCardHTML(x,i,gMean,showPosters,owned){
   const {f,d,s}=x;
   const col=s.match>=70?'#6fbf8f':s.match>=55?'#c8a840':'#8888aa';
   const chip=(txt,c,tip)=>`<span title="${esc(tip||'')}" style="background:${c}14;border:1px solid ${c}33;color:${c};border-radius:20px;padding:2px 9px;font-size:10px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis">${txt}</span>`;
@@ -3318,21 +3384,22 @@ function wlCardHTML(x,i,gMean){
   return `<div class="card" style="border:1px solid ${col}22">
     <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
       <span class="mono" style="color:#777787;font-size:11px;flex-shrink:0;padding-top:3px">${String(i+1).padStart(2,'0')}</span>
-      ${posterHTML(d.poster,f.name,40)}
+      ${posterHTML(d.poster,f.name,40,showPosters)}
       <div style="flex:1;min-width:0">
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(f.name)}</div>
         <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${meta}</div>
       </div>
+      ${owned===true?ownedRemoveBtn(f):''}
       <div style="text-align:right;flex-shrink:0" title="${esc('Match: 50 is neutral. Each axis runs from -1 to +1 — '+W+'.')}">
         <div class="mono" style="color:${col};font-size:18px;font-weight:bold;line-height:1">${s.match}</div>
         <div style="color:#777787;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-top:3px">match</div>
       </div>
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${chips.length?chips.join(''):'<span style="color:#777787;font-size:10px">No strong signals either way</span>'}</div>
-    ${providerSlotHTML(f.name,f.year,d.tmdbId)}
+    ${owned?'':providerSlotHTML(f.name,f.year,d.tmdbId)}
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <a href="${esc(lb)}" target="_blank" rel="noopener noreferrer" style="color:${col};font-size:11px;text-decoration:none;border-bottom:1px solid ${col}44">Letterboxd →</a>
-      ${justWatchLinkHTML(f.name,col)}
+      ${owned?'<span style="color:#7d7d94;font-size:11px">📀 In your collection</span>':justWatchLinkHTML(f.name,col)}
     </div>
   </div>`;
 }
@@ -3352,7 +3419,8 @@ function watchlistListHTML(ranked){
       :"Nothing left to rank — you've seen everything on this watchlist we could identify."}</div>`);
   } else {
     const shown=STATE._wlShowAll?r.ranked:r.ranked.slice(0,WL_SHOWN);
-    parts.push(`<div class="dir-grid">${shown.map((x,i)=>wlCardHTML(x,i,r.gMean)).join('')}</div>`);
+    const wlPosters=anyPoster(shown.map(x=>x.d));
+    parts.push(`<div class="dir-grid">${shown.map((x,i)=>wlCardHTML(x,i,r.gMean,wlPosters)).join('')}</div>`);
     if(shown.length<r.ranked.length)
       parts.push(`<div style="text-align:center;margin-top:18px"><button class="btn-ghost btn-sm" onclick="showAllWatchlist()">Show all ${r.ranked.length}</button></div>`);
   }
@@ -3432,6 +3500,265 @@ function watchlistBodyHTML(){
     <div id="wl-list">${watchlistListHTML(r)}</div>`;
 }
 
+// ─── My collection ────────────────────────────────────────────────────────────
+// Films you own — on disc, or bought digitally — kept as a second, smaller
+// watchlist. Typed in by hand (or imported from a Letterboxd list), ranked with
+// the same taste scoring, and without the streaming checks: it's already yours.
+// It lives in localStorage on its own rather than in the remembered session, so
+// loading a new export doesn't wipe it; Forget clears it with everything else.
+var OWNED_KEY='cmr_owned_v1';
+var _owned=null;   // var: read by buildSavePayload, which may run before this line is reached
+function ownedList(){
+  if(!_owned){
+    let raw=null; try{ raw=JSON.parse(localStorage.getItem(OWNED_KEY)||'null'); }catch(e){}
+    _owned=sanitizeWatchlist(raw)||{films:[],data:{}};
+  }
+  return _owned;
+}
+function saveOwned(){
+  const o=ownedList();
+  try{
+    if(o.films.length) localStorage.setItem(OWNED_KEY,JSON.stringify({films:o.films,data:o.data}));
+    else localStorage.removeItem(OWNED_KEY);
+  }catch(e){ showToast('Could not save your collection in this browser'); }
+  schedulePersist();
+}
+// A save file's copy is added to what this browser holds, never replacing it
+function mergeOwned(raw){
+  const inc=sanitizeWatchlist(raw); if(!inc) return;
+  const o=ownedList(), have=new Set(o.films.map(f=>f.name+'||'+f.year));
+  for(const f of inc.films){ const k=f.name+'||'+f.year; if(have.has(k)) continue; have.add(k); o.films.push(f); if(inc.data[k]) o.data[k]=inc.data[k]; }
+  saveOwned();
+}
+
+// Built-in database titles for the add box: exact title, then starts-with, then
+// contains. The database is ordered by popularity, so each tier keeps that order.
+const OWNED_SUGGEST = 8;
+function ownedSuggestions(q){
+  const t=normTitle(q); if(t.length<2) return [];
+  const exact=[], pre=[], sub=[];
+  for(const bucket of titleIndex().values()) for(const c of bucket){
+    if(c.t===t) exact.push(c); else if(c.t.startsWith(t)) pre.push(c); else if(t.length>=3&&c.t.includes(t)) sub.push(c);
+  }
+  // The database can hold one film under two spellings of its title
+  const seen=new Set(), out=[];
+  for(const c of exact.concat(pre,sub)){
+    const k=c.t+'||'+c.y; if(seen.has(k)) continue;
+    seen.add(k); out.push({name:c.raw,year:c.y});
+    if(out.length>=OWNED_SUGGEST) break;
+  }
+  return out;
+}
+let _ownSugg=[], _ownSuggI=-1, _ownSuggTimer;
+function ownedSuggest(){
+  clearTimeout(_ownSuggTimer);
+  _ownSuggTimer=setTimeout(()=>{
+    const inp=document.getElementById('own-title'); if(!inp) return;
+    _ownSugg=ownedSuggestions(inp.value); _ownSuggI=-1; paintOwnedSugg();
+  },120);
+}
+function paintOwnedSugg(){
+  const box=document.getElementById('own-sugg'), inp=document.getElementById('own-title'); if(!box) return;
+  box.style.display=_ownSugg.length?'block':'none';
+  if(inp) inp.setAttribute('aria-expanded',String(!!_ownSugg.length));
+  box.innerHTML=_ownSugg.map((s,i)=>`<div role="option" id="own-sugg-${i}" aria-selected="${i===_ownSuggI}" onmousedown="event.preventDefault();pickOwnedSugg(${i})" style="padding:8px 12px;cursor:pointer;font-size:13px;color:#e0d8c8;background:${i===_ownSuggI?'#1c1c30':'transparent'}">${esc(s.name)} <span style="color:#8c8ca2">${s.year}</span></div>`).join('');
+  if(inp){ if(_ownSuggI>=0) inp.setAttribute('aria-activedescendant','own-sugg-'+_ownSuggI); else inp.removeAttribute('aria-activedescendant'); }
+}
+// Enter adds straight from either box — the highlighted suggestion if there is
+// one, otherwise what was typed.
+function ownedKey(e){
+  if(e.key==='Enter'&&!(_ownSugg.length&&_ownSuggI>=0)){ e.preventDefault(); _ownSugg=[]; submitOwned(); return; }
+  if(!_ownSugg.length) return;
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    e.preventDefault();
+    const n=_ownSugg.length; _ownSuggI=e.key==='ArrowDown'?(_ownSuggI+1)%n:(_ownSuggI-1+n)%n;
+    paintOwnedSugg();
+  } else if(e.key==='Enter'&&_ownSuggI>=0){ e.preventDefault(); pickOwnedSugg(_ownSuggI); }
+  else if(e.key==='Escape'){ _ownSugg=[]; paintOwnedSugg(); }
+}
+function hideOwnedSugg(){ setTimeout(()=>{ _ownSugg=[]; paintOwnedSugg(); },150); }
+function pickOwnedSugg(i){ const s=_ownSugg[i]; if(!s) return; _ownSugg=[]; addOwnedFilm(s.name,s.year); }
+function submitOwned(){
+  const t=document.getElementById('own-title'), y=document.getElementById('own-year');
+  const name=(t&&t.value||'').trim(); if(!name){ if(t) t.focus(); return; }
+  const year=parseInt(y&&y.value,10);
+  addOwnedFilm(name,Number.isFinite(year)&&year>=1870&&year<=2100?year:null);
+}
+
+// Without a year, an exact title in the database stands in for one — the most
+// popular film of that name, which is nearly always the one meant.
+function resolveOwnedYear(name){
+  const t=normTitle(name); if(!t) return null;
+  for(const bucket of titleIndex().values()) for(const c of bucket) if(c.t===t) return {name:c.raw,year:c.y};
+  return null;
+}
+async function addOwnedFilm(name,year){
+  name=String(name).trim().slice(0,200); if(!name) return;
+  if(!Number.isFinite(year)){ const r=resolveOwnedYear(name); if(r){ name=r.name; year=r.year; } else year=null; }
+  const films=[{name,year,uri:'',added:new Date().toISOString().slice(0,10)}];
+  const added=await addOwnedFilms(films);
+  if(!added){ showToast(`${name} is already in your collection`); return; }
+  if(isSeenIn(librarySeenIndex(),films[0])) showToast(`Added — you've already logged ${name}, so it's listed under Already seen`);
+  const t=document.getElementById('own-title'); if(t) t.focus();
+}
+async function importOwnedFiles(files){
+  try{
+    let rows=[];
+    for(const file of Array.from(files||[])){
+      if(file.size>25*1024*1024) throw new Error('That file is too large (>25 MB).');
+      rows=rows.concat(parseWatchlistCSV(await file.text()));
+    }
+    if(!rows.length){ showToast('No films found in that file'); return; }
+    const n=await addOwnedFilms(dedupeWatchlist(rows));
+    showToast(n?`Added ${n} film${n!==1?'s':''} to your collection`:'Those films are all in your collection already');
+  }catch(e){ showToast(e.message||'Could not read that list'); }
+}
+// Same two lookup tiers as the watchlist: the database at once, TMDB for what
+// it lacks, loose matches and anything newer than the snapshot. Returns how many were new.
+async function addOwnedFilms(rows){
+  const o=ownedList(), have=new Set(o.films.map(f=>f.name+'||'+f.year));
+  const fresh=rows.filter(f=>{ const k=f.name+'||'+f.year; if(have.has(k)) return false; have.add(k); return true; });
+  if(!fresh.length) return 0;
+  const edge=dbSnapshotYear(), todo=[];
+  for(const f of fresh){
+    o.films.unshift(f);
+    const exact=lookupFromDB(f), m=exact?null:fuzzyDBMatch(f), r=exact||(m&&m.data);
+    if(r) o.data[f.name+'||'+f.year]=r;
+    if(Number.isFinite(f.year)&&(!r||(m&&m.loose)||f.year>=edge)) todo.push(f);
+  }
+  saveOwned();
+  const key=getKey('tmdb');
+  if(key&&todo.length) STATE._ownedPending++;
+  renderRecsPanel();
+  if(key&&todo.length){
+    try{
+      const t=await fetchCrewTMDB(todo,key,()=>{},null);
+      // Only for films still on the list — one could have been removed meanwhile
+      if(t) for(const k in t) if(o.films.some(f=>f.name+'||'+f.year===k)) o.data[k]=t[k];
+      saveOwned();
+    }catch(e){ showToast(/Invalid TMDB/.test(e.message)?'Invalid TMDB API key — check ⚙ Setup':'Some lookups failed'); }
+    finally{ STATE._ownedPending--; if(STATE.recSource==='owned') renderRecsPanel(); }
+  }
+  return fresh.length;
+}
+function removeOwnedFilm(k){
+  const o=ownedList(), i=o.films.findIndex(f=>f.name+'||'+f.year===k);
+  if(i<0) return;
+  o.films.splice(i,1); delete o.data[k];
+  saveOwned();
+  if(!repaintOwnedStats()) renderRecsPanel();
+}
+// A remove keeps the add box and sliders where they are; only the list and the counts repaint
+function repaintOwnedStats(){
+  const st=document.getElementById('own-stats'); if(!st||!ownedList().films.length) return false;
+  st.innerHTML=ownedStatsHTML(rankOwned());
+  repaintWlList();
+  return true;
+}
+function ownedRemoveBtn(f){
+  return `<button type="button" onclick="removeOwnedFilm(${esc(JSON.stringify(f.name+'||'+f.year))})" title="Remove from your collection" aria-label="Remove ${esc(f.name)} from your collection" style="background:none;border:none;color:#66667a;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;flex-shrink:0;font-family:inherit">✕</button>`;
+}
+function clearOwned(){
+  if(!confirm('Remove every film from your collection?')) return;
+  _owned={films:[],data:{}}; saveOwned(); renderRecsPanel();
+}
+
+function ownedStatsHTML(r){
+  const o=ownedList();
+  return [`<b style="color:#c8c0b0">${o.films.length}</b> owned`,
+    `<b style="color:#c8c0b0">${r.ranked.length}</b> ranked`,
+    r.seen?`${r.seen} already seen`:'',
+    r.hiddenByGenre?`${r.hiddenByGenre} outside ${esc(filterLabel())}`:'',
+    r.hiddenByRuntime?`${r.hiddenByRuntime} too long`:'',
+    r.unmatched.length?`${r.unmatched.length} without data`:''].filter(Boolean).join(' · ');
+}
+
+function ownedListHTML(ranked){
+  const o=ownedList();
+  if(!o.films.length) return '';
+  const r=ranked||rankOwned(), parts=[];
+  const row=(f,extra)=>`<div style="display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #14141f">
+    <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${Number.isFinite(f.year)?f.year:'—'}</span>
+    <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(f.name)}</span>${extra||''}${ownedRemoveBtn(f)}</div>`;
+  if(!r.ranked.length){
+    parts.push(`<div style="text-align:center;padding:40px 0;color:#7d7d94;font-size:14px">${
+      STATE._ownedPending?'Ranking as soon as the lookups finish…'
+      :r.hiddenByRuntime&&STATE.wlMaxRuntime?`Nothing in your collection runs under ${fmtDuration(STATE.wlMaxRuntime)}${r.hiddenByGenre?' in '+esc(filterLabel()):''}.`
+      :r.hiddenByGenre?`Nothing in your collection in ${esc(filterLabel())}.`
+      :"Nothing left to rank — you've seen everything in your collection we could identify."}</div>`);
+  } else {
+    const shown=STATE._ownedShowAll?r.ranked:r.ranked.slice(0,WL_SHOWN);
+    const ps=anyPoster(shown.map(x=>x.d));
+    parts.push(`<div class="dir-grid">${shown.map((x,i)=>wlCardHTML(x,i,r.gMean,ps,true)).join('')}</div>`);
+    if(shown.length<r.ranked.length)
+      parts.push(`<div style="text-align:center;margin-top:18px"><button class="btn-ghost btn-sm" onclick="showAllWatchlist()">Show all ${r.ranked.length}</button></div>`);
+  }
+  if(r.unmatched.length&&!STATE._ownedPending)
+    parts.push(`<details style="margin-top:26px;color:#9595aa;font-size:12px">
+      <summary style="cursor:pointer">${r.unmatched.length} film${r.unmatched.length!==1?'s':''} couldn't be ranked — no cast or crew data${getKey('tmdb')?' (check the title and year)':' (add a free TMDB key in ⚙ Setup to look them up)'}</summary>
+      <div style="margin-top:10px">${r.unmatched.map(f=>row(f)).join('')}</div></details>`);
+  if(r.seenFilms.length)
+    parts.push(`<details style="margin-top:14px;color:#9595aa;font-size:12px">
+      <summary style="cursor:pointer">${r.seenFilms.length} already seen — left out of the ranking</summary>
+      <div style="margin-top:10px">${r.seenFilms.map(f=>row(f)).join('')}</div></details>`);
+  return parts.join('');
+}
+
+function ownedBodyHTML(){
+  const o=ownedList(), has=o.films.length>0;
+  const form=`<input id="own-file-input" type="file" accept=".csv" multiple class="sr-only" tabindex="-1" onchange="importOwnedFiles(this.files);this.value=''"/>
+    <form onsubmit="event.preventDefault();submitOwned()" style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;margin-bottom:${has?14:10}px;max-width:640px">
+      <div style="position:relative;flex:1;min-width:180px">
+        <label for="own-title" class="sr-only">Film title</label>
+        <input id="own-title" class="input-field" type="text" placeholder="Add a film you own…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="own-sugg" oninput="ownedSuggest()" onkeydown="ownedKey(event)" onblur="hideOwnedSugg()" style="padding:10px 14px"/>
+        <div id="own-sugg" role="listbox" aria-label="Matching films" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);background:#111120;border:1px solid #2a2a40;border-radius:8px;overflow:hidden;z-index:20;box-shadow:0 10px 30px #0008"></div>
+      </div>
+      <label for="own-year" class="sr-only">Year (optional)</label>
+      <input id="own-year" class="input-field" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="Year" onkeydown="ownedKey(event)" oninput="this.value=this.value.replace(/\D/g,'')" style="width:92px;padding:10px 12px"/>
+      <button class="btn-gold btn-sm" type="submit">+ Add</button>
+    </form>`;
+  if(!has){
+    return `<div style="max-width:640px">${form}
+      <p style="color:#9595aa;font-size:12px;line-height:1.7">
+        Start typing and pick a film from the list, or type a title and year and press Add.
+        Each one is ranked by how its director, writers, top-billed cast and genres have landed with you, plus its TMDB rating — the same as your watchlist.
+      </p>
+      <button class="btn-ghost btn-sm" style="margin-top:8px" onclick="document.getElementById('own-file-input').click()">↑ Import a Letterboxd list CSV</button>
+    </div>`;
+  }
+  const r=rankOwned();
+  const sliders=WL_AXES.map(a=>`<div class="slider-group" style="min-width:110px;flex:1">
+      <label class="slider-label" for="sl-wl-${a.k}">${a.icon} ${a.label} <span id="lbl-wl-${a.k}" class="slider-val">${WL_WEIGHTS[a.k]}</span></label>
+      <input type="range" min="0" max="100" step="5" value="${WL_WEIGHTS[a.k]}" id="sl-wl-${a.k}" class="wslider" oninput="onWlWeight('${a.k}',this.value)"/>
+    </div>`).join('');
+  return `${form}
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <div id="own-stats" style="color:#9595aa;font-size:12px;flex:1;min-width:200px">${ownedStatsHTML(r)}</div>
+      <button class="btn-ghost btn-sm" onclick="document.getElementById('own-file-input').click()" title="Add every film from a Letterboxd list export">↑ Import list</button>
+      <button class="btn-ghost btn-sm" onclick="clearOwned()" style="color:#9a7878;border-color:#2a1a1a">Clear all</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin-right:2px">Length</span>
+      ${WL_RUNTIMES.map(m=>{ const on=STATE.wlMaxRuntime===m;
+        return `<button onclick="setWlRuntime(${m})" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${m?'Under '+fmtDuration(m):'Any'}</button>`; }).join('')}
+      <span style="flex:1"></span>
+      <button class="btn-gold btn-sm" onclick="surpriseMe()" ${r.ranked.length?'':'disabled style="opacity:.5"'}>🎲 Surprise me</button>
+      <button class="btn-ghost btn-sm" onclick="exportLetterboxdList('owned')" ${r.ranked.length?'':'disabled style="opacity:.5"'} title="Download the ranked list as a CSV that Letterboxd imports as a list">↓ Letterboxd list</button>
+    </div>
+    ${STATE._ownedPending?`<div style="display:flex;align-items:center;gap:10px;background:#0c0c18;border:1px solid #1e1e2e;border-radius:8px;padding:9px 14px;margin-bottom:14px">
+      <div class="spinner" style="width:14px;height:14px;border-width:2px;margin:0"></div>
+      <div role="status" style="color:#a9a9bc;font-size:12px">Looking up on TMDB…</div></div>`:''}
+    <div style="background:#0a0a14;border:1px solid #1a1a2a;border-radius:10px;padding:12px 16px;margin-bottom:22px">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+        <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase">What matters most</span>
+        <div style="flex:1"></div>
+        <button onclick="resetWlWeights()" style="background:none;border:none;color:#8c8ca2;font-family:inherit;font-size:11px;cursor:pointer;text-decoration:underline">Reset</button>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap">${sliders}</div>
+    </div>
+    <div id="wl-list">${ownedListHTML(r)}</div>`;
+}
+
 // Per-category search, sort and "show more" state. Kept here rather than read
 // back from the inputs, so a slider drag (which rebuilds the panel) no longer
 // wipes what was typed.
@@ -3458,7 +3785,8 @@ function filterCat(cat,keepShown){
   if(!data.length){grid.innerHTML='';empty.style.display='block';if(more) more.innerHTML='';return;}
   empty.style.display='none';
   const page=data.slice(0,ui.shown);
-  grid.innerHTML=page.map(d=>personCardHTML(d,rankMap[d.name],cat)).join('');
+  const pagePosters=anyPoster(page.flatMap(cardFilms),filmPosterOf);
+  grid.innerHTML=page.map(d=>personCardHTML(d,rankMap[d.name],cat,pagePosters)).join('');
   if(more) more.innerHTML=page.length<data.length
     ? `<button type="button" class="btn-ghost btn-sm load-more" onclick="showMoreCat('${cat}')">Show more (${page.length} of ${data.length})</button>`
     : '';
