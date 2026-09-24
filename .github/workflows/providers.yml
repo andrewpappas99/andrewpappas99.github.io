@@ -1,0 +1,44 @@
+# Weekly: bake "where is it streaming" into providers-<REGION>.js so visitors
+# without a TMDB key see it. The key lives only in the TMDB_TOKEN repository
+# secret; build-providers.js never prints or writes it.
+name: Streaming data
+
+on:
+  schedule:
+    - cron: '17 9 * * 1'   # Mondays 09:17 UTC
+  workflow_dispatch:        # the "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write   # commit the new files, nothing else
+
+concurrency:
+  group: providers
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      REGIONS: US,GB,CA,AU
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch streaming availability
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: node .github/scripts/build-providers.js --dir . --regions "$REGIONS"
+
+      - name: Commit if anything changed
+        run: |
+          git add providers-*.js
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Refresh streaming data"
+          git pull --rebase origin main
+          git push origin HEAD:main
