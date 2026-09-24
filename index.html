@@ -141,7 +141,7 @@ body.no-posters .poster{display:none}
       </button>
       <div id="config-panel" style="display:none;padding:0 18px 18px">
         <div style="color:#9595aa;font-size:12px;line-height:1.65;margin-bottom:14px;padding-top:4px">
-          The built-in database covers the top ~10,000 films and works without any key.
+          The built-in database covers <span id="db-size-note">the most popular films</span> and works without any key.
           Add a free <b style="color:#c8c0b0">TMDB</b> key to look up obscure or foreign films not in the database.
           Get one at <span style="color:#c8a840">themoviedb.org/settings/api</span>.
         </div>
@@ -591,6 +591,9 @@ function updateConfigBadge(){
   const dbSize=Object.keys(FILM_DB).length;
   const el=document.getElementById('config-status-badge');
   const note=dbHealthNote();
+  // Read off the database itself — the copy said ~10,000 long after it held 28,000+
+  const sizeNote=document.getElementById('db-size-note');
+  if(sizeNote) sizeNote.textContent=dbSize?`the ${dbSize.toLocaleString()} most popular films`:'no films yet (film-db.js is missing)';
   const warn=note?`<span style="color:#998870;font-size:11px;margin-left:8px" title="${esc(note)}">⚠ ${esc(note)}</span>`:'';
   if(dbSize>0&&hasTMDB){
     el.innerHTML='<span style="color:#4a9a4a;font-size:11px;margin-left:6px">● DB ('+dbSize.toLocaleString()+' films) + TMDB fallback</span>'+warn;
@@ -1176,23 +1179,20 @@ function applySavedData(d){
   STATE._matchedFilms=Number.isFinite(d.matchedFilms)?d.matchedFilms:0;
   STATE._missList=sanitizeMissList(d.missList);
   STATE._dbMisses=STATE._missList.length||(Number.isFinite(d.dbMisses)?d.dbMisses:0);
+  // A chip picked for the previous library means nothing for this one
+  STATE._activeGenre=null; STATE._activeDecade=null;
   // Version 3+: has raw filmData → full slider support
   if(d.version>=3 && d.filmData && d.films){
     if(!d.films.length||!Object.keys(d.filmData).length) throw new Error('Cache file has no film data.');
     STATE._filmData=d.filmData;
     STATE._films=d.films;
-    const{byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(d.films,d.filmData);
-    STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
-    STATE._globalMean=globalMean;
-    STATE._conformity=computeConformity(d.films,d.filmData);
-    if(genres.length) STATE.genres=genres;
-    // Re-score with current weights/settings
-    STATE.directors=scoreDirectors(byDir,globalMean);
-    STATE.writers=computeScores(byWriter,globalMean);
-    STATE.actors=computeScores(byActor,globalMean);
+    const matched=STATE._matchedFilms;
+    rescoreFromState();   // re-score with current weights/settings
+    if(matched) STATE._matchedFilms=matched;
+    if(!STATE.genres.length) STATE.genres=d.genres||[];
   } else {
     // Version 1/2: no raw data, so conformity can't be measured
-    STATE._conformity=null;
+    STATE._conformity=null; STATE._byDirAll=null;
     STATE.directors=d.directors||[];
     STATE.writers=d.writers||[];
     STATE.actors=d.actors||[];
@@ -1261,6 +1261,9 @@ function parseProfileName(text){
   return (given||(rows[1][gi('username')]||'').trim()).slice(0,40);
 }
 function isProfileFile(f){ return /^profile\.csv$/i.test(String(f&&f.name||'')); }
+// Files every Letterboxd export carries that are not film logs. Skipped quietly —
+// naming them in a "Skipped …" toast on every whole-zip upload read as an error.
+function isKnownNonLogFile(f){ return /^comments\.csv$/i.test(String(f&&f.name||'')); }
 
 async function handleFileInput(files){
   let arr=Array.from(files); if(!arr.length)return;
@@ -1360,7 +1363,7 @@ async function startAnalysis(){
     const skipped=[];
     let lastError=null;
     for(const file of STATE.selectedFiles){
-      if(isProfileFile(file)) continue;
+      if(isProfileFile(file)||isKnownNonLogFile(file)) continue;
       const text=await file.text();
       if(isWatchlistFile(file)){
         // A bad watchlist shouldn't cost the whole analysis
@@ -1388,6 +1391,7 @@ async function startAnalysis(){
       :'No built-in database found and no TMDB API key set. Run build-db.js or add a TMDB key in ⚙.');
     STATE._missList=misses.map(f=>({name:f.name,year:f.year})); STATE._dbMisses=misses.length;
     STATE._totalFilms=films.length; STATE._filmData=filmData; STATE._films=films;
+    STATE._activeGenre=null; STATE._activeDecade=null; STATE._byDirAll=null;
     clearWatchlist();
 
     upd(80,'Calculating scores…');
@@ -1409,17 +1413,26 @@ async function startAnalysis(){
   }
 }
 
-// Maps, scores, genres and conformity from STATE._films / STATE._filmData.
+// Maps, scores, genres and conformity from STATE._films / STATE._filmData — the
+// one scoring path, so every caller honours the active genre and decade filters.
+// It used to ignore them, so a TMDB pass finishing in the background quietly
+// replaced a filtered Rushmore with the unfiltered one while the chip still showed.
+// Genres, the global mean and conformity always describe the whole library, and
+// _byDirAll keeps each director's unfiltered films for coverage.
 function rescoreFromState(){
-  const {byDir,byWriter,byActor,genres,globalMean}=buildPersonMaps(STATE._films,STATE._filmData);
+  const all=buildPersonMaps(STATE._films,STATE._filmData);
   STATE._matchedFilms=STATE._films.filter(f=>STATE._filmData[f.name+'||'+f.year]).length;
-  STATE._byDir=byDir; STATE._byWriter=byWriter; STATE._byActor=byActor;
-  STATE._globalMean=globalMean;
+  STATE._byDirAll=all.byDir;
+  STATE._globalMean=all.globalMean;
   STATE._conformity=computeConformity(STATE._films,STATE._filmData);
-  STATE.genres=genres;
-  STATE.directors=scoreDirectors(byDir,globalMean);
-  STATE.writers=computeScores(byWriter,globalMean);
-  STATE.actors=computeScores(byActor,globalMean);
+  STATE.genres=all.genres;
+  const maps=anyFilter()
+    ? buildPersonMaps(STATE._films.filter(f=>passesFilters(f,STATE._filmData[f.name+'||'+f.year])),STATE._filmData)
+    : all;
+  STATE._byDir=maps.byDir; STATE._byWriter=maps.byWriter; STATE._byActor=maps.byActor;
+  STATE.directors=scoreDirectors(maps.byDir,all.globalMean);
+  STATE.writers=computeScores(maps.byWriter,all.globalMean,qualifyMin());
+  STATE.actors=computeScores(maps.byActor,all.globalMean,qualifyMin());
 }
 
 // The TMDB pass for films the database lacked, run once the page is up. When it
@@ -1430,7 +1443,7 @@ async function runBackgroundLookups(todo,key,runId){
   STATE._bgAbort=ctrl;
   STATE._bgLookup={done:0,total:todo.length};
   renderBgStatus();
-  let found=null;
+  let found=null, failed=false;
   try{
     found=await fetchCrewTMDB(todo,key,(pct,msg,done,total)=>{
       if(STATE.runId!==runId) return;
@@ -1438,6 +1451,7 @@ async function runBackgroundLookups(todo,key,runId){
       renderBgStatus();
     },ctrl.signal);
   }catch(e){
+    failed=true;
     if(STATE.runId===runId&&e.name!=='AbortError') showToast(/Invalid TMDB/.test(e.message)?'Invalid TMDB API key — check ⚙ Setup':'Some TMDB lookups failed');
   }
   if(STATE.runId!==runId||ctrl.signal.aborted) return;
@@ -1454,7 +1468,7 @@ async function runBackgroundLookups(todo,key,runId){
     window.scrollTo(0,y);
     const n=STATE._matchedFilms-before;
     showToast(n>0?`${n} more film${n!==1?'s':''} matched on TMDB — scores updated`:'TMDB lookups finished — scores updated');
-  } else showToast('TMDB had none of the missing films either');
+  } else if(!failed) showToast('TMDB had none of the missing films either');   // a failure already said why
   renderBgStatus();
   if(!STATE.directors.length&&!STATE.writers.length&&!STATE.actors.length)
     showError(`Could not identify enough crew/cast data with ${MIN_FILMS}+ rated films per person.`);
@@ -1498,7 +1512,7 @@ function resetApp(){
   if(STATE._refineAbort){STATE._refineAbort.abort();STATE._refineAbort=null;}
   cancelBackgroundLookups();
   STATE.directors=[];STATE.writers=[];STATE.actors=[];STATE.genres=[];STATE.userName='';STATE.selectedFiles=[];
-  STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._filmData=null;STATE._films=null;
+  STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._byDirAll=null;STATE._filmData=null;STATE._films=null;
   STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._missList=[];STATE._activeGenre=null;STATE._activeDecade=null;STATE._conformity=null;
   STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';
   clearWatchlist();resetProviders();STATE.recSource='directors';invalidateCoverage();resetSettings();
@@ -1601,7 +1615,11 @@ async function resumeSession(){
   }catch(e){
     console.warn('Saved session unreadable',e);
     showToast('That saved session could not be opened');
-    forgetSession();
+    // Only the broken record goes. forgetSession() would also have taken the API
+    // key and the My collection list, which lives nowhere else.
+    clearTimeout(_persistTimer);
+    try{ await idbDo('readwrite',st=>st.delete(SESSION_KEY)); }catch(e2){}
+    renderResumeCard();
   }
 }
 
@@ -1722,8 +1740,14 @@ function downloadPNG(){
   if(!CATS.includes(cat)){ showToast('Open a Rushmore tab to export a PNG'); return; }
   const top4=STATE[cat].slice(0,4);
   if(!top4.length){alert('No data for '+CAT_LABELS[cat]+' yet.');return;}
-  const un=STATE.userName, label=`${un?un+"'s ":''}${CAT_LABELS[cat]} Mount Rushmore`;
+  const un=STATE.userName, label=rushmoreLabel(cat,un,'',filterLabel());
   svgToPNG(buildExportSVG(top4,label),820,710,(un||'my')+'-'+cat+'-mount-rushmore');
+}
+
+// "Andrew's Horror · 1990s Directors Mount Rushmore". A filtered Rushmore used to
+// carry the plain title, so a PNG or share link passed off a slice as the whole.
+function rushmoreLabel(cat,un,fallback,filter){
+  return `${un?un+"'s ":fallback}${filter?filter+' ':''}${CAT_LABELS[cat]} Mount Rushmore`;
 }
 
 // Rasterize an SVG string at 2x and download it; falls back to the SVG itself
@@ -1927,8 +1951,17 @@ function seenEntry(f){
           doc:g.split(',').indexOf('Documentary')>=0};
 }
 
+// Under a genre or decade filter d.films is only the filtered slice, and measuring
+// that against a whole filmography listed everything outside the filter as unseen
+// (Nolan at 4/12 in the 2010s, The Dark Knight under "Not seen"). Coverage always
+// reads the director's unfiltered films.
+function coverageFilms(d){
+  const all=STATE._byDirAll&&STATE._byDirAll[d.name];
+  return all||d.films||[];
+}
+
 function computeCoverage(d){
-  const allSeen=(d.films||[]).map(seenEntry);
+  const allSeen=coverageFilms(d).map(seenEntry);
   const seen=allSeen.filter(isFeature);
   // seenList is what the fraction actually counted, so the modal can list exactly
   // those rather than every logged title
@@ -2373,7 +2406,7 @@ function personCardHTML(d,rank,cat,showPosters){
 function renderCategoryPanel(cat){
   const data=STATE[cat], top4=data.slice(0,4), un=STATE.userName;
   const catLabel=CAT_LABELS[cat], icon=CAT_ICONS[cat];
-  const rushLabel=`${un?un+"'s ":'Your '}${catLabel} Mount Rushmore`;
+  const rushLabel=rushmoreLabel(cat,un,'Your ',filterLabel());
 
   if(!data.length){
     return `<div style="text-align:center;padding:80px 0;color:#7d7d94">
@@ -2685,7 +2718,11 @@ const PROV_ERROR_TTL=10*60000;   // a failed lookup is asked again after ten min
 let _provErrors=0;
 // The retry button on a failed card: drop the error record and queue it again.
 function retryProvider(k){
-  const c=provCache(); delete c[k];
+  const c=provCache();
+  // The failure is no longer outstanding; if the retry fails too it counts again
+  if(c[k]&&c[k].error) _provErrors=Math.max(0,_provErrors-1);
+  delete c[k];
+  const el=document.getElementById('wl-stream-status'); if(el) el.textContent=streamStatusText();
   document.querySelectorAll('.prov-slot').forEach(el=>{
     if(el.dataset.k!==k) return;
     const y=parseInt(el.dataset.y,10);
@@ -3016,7 +3053,7 @@ function renderRecsPanel(){
     </div>`;
 
   if(onWl){ el.innerHTML=header+watchlistBodyHTML()+blindSpotsHTML(); hydrateProviders(); return; }
-  if(onOwn){ el.innerHTML=header+ownedBodyHTML(); return; }
+  if(onOwn){ const keep=captureOwnedInput(); el.innerHTML=header+ownedBodyHTML(); restoreOwnedInput(keep); return; }
 
   const tabs=Object.keys(REC_MODES).map(k=>{
     const m=REC_MODES[k], on=k===mode;
@@ -3370,7 +3407,7 @@ function rankCurrent(){ return STATE.recSource==='owned'?rankOwned():rankWatchli
 // `stream` is false for the collection: films you own need no streaming check
 // `rewatch` ranks films you've seen too, pushed down by how recently (see rewatchPenalty)
 function rankList(wl,stream,rewatch){
-  const out={ranked:[],seen:0,seenFilms:[],unmatched:[],hiddenByGenre:0,hiddenByRuntime:0,hiddenByStream:0,awaiting:[]};
+  const out={ranked:[],seen:0,seenFilms:[],unmatched:[],hiddenByGenre:0,hiddenByRuntime:0,hiddenByStream:0,streamUnknown:0,awaiting:[]};
   if(!wl) return out;
   const taste=buildTasteProfile(), seenIdx=librarySeenIndex(), ag=STATE._activeGenre;
   const lastIdx=rewatch?lastWatchedIndex():null;
@@ -3390,7 +3427,11 @@ function rankList(wl,stream,rewatch){
     if(stream&&STATE.wlStreamOnly&&getKey('tmdb')){
       const p=providerFor(f.name,f.year,d.tmdbId);
       if(!p){ out.awaiting.push({title:f.name,year:f.year,tmdbId:d.tmdbId||null}); continue; }
-      if(!streamsOnMine(p)){ out.hiddenByStream++; continue; }
+      // A lookup that failed says nothing about where the film streams, so it
+      // stays in the list, where its card offers a retry, rather than being
+      // counted as "not on your services".
+      if(p.error) out.streamUnknown++;
+      else if(!streamsOnMine(p)){ out.hiddenByStream++; continue; }
     }
     const sc=scoreWatchlistFilm(d,taste);
     if(rw){ sc.total-=rw.penalty; sc.match=Math.round(50+50*sc.total); sc.rewatch=rw; }
@@ -3517,6 +3558,7 @@ function watchlistBodyHTML(){
     r.hiddenByGenre?`${r.hiddenByGenre} outside ${esc(filterLabel())}`:'',
     r.hiddenByRuntime?`${r.hiddenByRuntime} too long`:'',
     r.hiddenByStream?`${r.hiddenByStream} not on ${Object.keys(SERVICES).length?'your services':'streaming'}`:'',
+    r.streamUnknown?`${r.streamUnknown} couldn't be checked`:'',
     r.unmatched.length&&!wl.pending?`${r.unmatched.length} without data`:''].filter(Boolean).join(' · ');
   const sliders=WL_AXES.map(a=>`<div class="slider-group" style="min-width:110px;flex:1">
       <label class="slider-label" for="sl-wl-${a.k}">${a.icon} ${a.label} <span id="lbl-wl-${a.k}" class="slider-val">${WL_WEIGHTS[a.k]}</span></label>
@@ -3654,8 +3696,13 @@ async function addOwnedFilm(name,year){
   name=String(name).trim().slice(0,200); if(!name) return;
   if(!Number.isFinite(year)){ const r=resolveOwnedYear(name); if(r){ name=r.name; year=r.year; } else year=null; }
   const films=[{name,year,uri:'',added:new Date().toISOString().slice(0,10)}];
+  // Empty the box before the panel re-renders (which keeps whatever is in it);
+  // a duplicate puts the text back so it can be corrected.
+  const ti=document.getElementById('own-title'), yi=document.getElementById('own-year');
+  const typed=[ti&&ti.value,yi&&yi.value];
+  if(ti) ti.value=''; if(yi) yi.value='';
   const added=await addOwnedFilms(films);
-  if(!added){ showToast(`${name} is already in your collection`); return; }
+  if(!added){ if(ti) ti.value=typed[0]||''; if(yi) yi.value=typed[1]||''; showToast(`${name} is already in your collection`); return; }
   if(isSeenIn(librarySeenIndex(),films[0])) showToast(ownedRewatch()?`Added as a rewatch — ranked lower the more recently you saw it`:`Added — you've already logged ${name}, so it's listed under Already seen`);
   const t=document.getElementById('own-title'); if(t) t.focus();
 }
@@ -3688,16 +3735,35 @@ async function addOwnedFilms(rows){
   const key=getKey('tmdb');
   if(key&&todo.length) STATE._ownedPending++;
   renderRecsPanel();
-  if(key&&todo.length){
-    try{
-      const t=await fetchCrewTMDB(todo,key,()=>{},null);
-      // Only for films still on the list — one could have been removed meanwhile
-      if(t) for(const k in t) if(o.films.some(f=>f.name+'||'+f.year===k)) o.data[k]=t[k];
-      saveOwned();
-    }catch(e){ showToast(/Invalid TMDB/.test(e.message)?'Invalid TMDB API key — check ⚙ Setup':'Some lookups failed'); }
-    finally{ STATE._ownedPending--; if(STATE.recSource==='owned') renderRecsPanel(); }
-  }
+  // Not awaited: the add box is usable again at once rather than after the lookup,
+  // and the caller's focus and toasts don't land seconds late.
+  if(key&&todo.length) STATE._ownedLookup=lookupOwned(o,todo,key);
   return fresh.length;
+}
+async function lookupOwned(o,todo,key){
+  try{
+    const t=await fetchCrewTMDB(todo,key,()=>{},null);
+    // Only for films still on the list — one could have been removed meanwhile
+    if(t) for(const k in t) if(o.films.some(f=>f.name+'||'+f.year===k)) o.data[k]=t[k];
+    if(o===_owned) saveOwned();   // not after Forget or Clear all swapped the list out
+  }catch(e){ showToast(/Invalid TMDB/.test(e.message)?'Invalid TMDB API key — check ⚙ Setup':'Some lookups failed'); }
+  finally{ STATE._ownedPending--; if(STATE.recSource==='owned') renderRecsPanel(); }
+}
+// The owned panel is rebuilt whole when a lookup lands, and that rebuild used to
+// wipe whatever was half-typed in the add box. Carry the box's text, focus and
+// caret across the rebuild.
+function captureOwnedInput(){
+  const t=document.getElementById('own-title'), y=document.getElementById('own-year');
+  if(!t) return null;
+  const a=document.activeElement, focus=a===t?'own-title':a===y?'own-year':'';
+  return {t:t.value||'', y:(y&&y.value)||'', focus, sel:focus&&a.selectionStart!=null?[a.selectionStart,a.selectionEnd]:null};
+}
+function restoreOwnedInput(s){
+  if(!s) return;
+  const t=document.getElementById('own-title'), y=document.getElementById('own-year');
+  if(t) t.value=s.t; if(y) y.value=s.y;
+  const f=s.focus&&document.getElementById(s.focus);
+  if(f){ f.focus(); if(s.sel&&f.setSelectionRange) try{ f.setSelectionRange(s.sel[0],s.sel[1]); }catch(e){} }
 }
 function removeOwnedFilm(k){
   const o=ownedList(), i=o.films.findIndex(f=>f.name+'||'+f.year===k);
@@ -4983,22 +5049,13 @@ function computeConformity(films, filmData){
 function reScoreAndRender(){
   STATE._history=null;   // director scores feed the history tie-break
   if(!STATE._byDir) return;
-  if(STATE._filmData && STATE._films){
-    const films=anyFilter()
-      ? STATE._films.filter(f=>passesFilters(f,STATE._filmData[f.name+'||'+f.year]))
-      : STATE._films;
-    const maps=buildPersonMaps(films,STATE._filmData);
-    STATE._byDir=maps.byDir; STATE._byWriter=maps.byWriter; STATE._byActor=maps.byActor;
-    // Only update full genre list and global mean when not filtering
-    if(!anyFilter()){
-      STATE.genres=maps.genres;
-      STATE._globalMean=maps.globalMean;
-      STATE._conformity=computeConformity(STATE._films,STATE._filmData);
-    }
+  if(STATE._filmData && STATE._films) rescoreFromState();
+  else {
+    // v1/v2 save files carry no raw data, so there is nothing to filter
+    STATE.directors=scoreDirectors(STATE._byDir,STATE._globalMean);
+    STATE.writers=computeScores(STATE._byWriter,STATE._globalMean,qualifyMin());
+    STATE.actors=computeScores(STATE._byActor,STATE._globalMean,qualifyMin());
   }
-  STATE.directors=scoreDirectors(STATE._byDir,STATE._globalMean);
-  STATE.writers=computeScores(STATE._byWriter,STATE._globalMean,qualifyMin());
-  STATE.actors=computeScores(STATE._byActor,STATE._globalMean,qualifyMin());
   renderResults();
 }
 
@@ -5103,10 +5160,14 @@ function updateModalText(){
 }
 
 // ─── Share / URL encoding ─────────────────────────────────────────────────────
+// One timer for the one toast: each used to schedule its own hide, so a message
+// shown two seconds after another vanished almost at once.
+let _toastTimer=null;
 function showToast(msg){
   const t=document.getElementById('share-toast');
   t.textContent=msg; t.style.display='block';
-  setTimeout(()=>t.style.display='none', 2200);
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>t.style.display='none', 2200);
 }
 
 function slimScored(arr){
@@ -5149,6 +5210,7 @@ async function inflateRaw(bytes){
 async function generateShareURL(){
   const payload={
     v:3, un:STATE.userName||'',
+    f:filterLabel(),   // the genre/decade the lists were filtered to, if any
     g:(STATE.genres||[]).slice(0,8).map(g=>({g:g.genre,c:g.count})),
     d:slimScored(STATE.directors),
     w:slimScored(STATE.writers),
@@ -5198,6 +5260,7 @@ function validateShare(p){
   const cg=g=>({genre:String(g?.g??g?.genre??'').slice(0,40),count:safeNum(g?.c??g?.count,0,100000)});
   return{
     userName:String(p.un||'').slice(0,60),
+    filter:typeof p.f==='string'?p.f.slice(0,60):'',
     directors:Array.isArray(p.d)?p.d.slice(0,4).map(cp):[],
     writers:Array.isArray(p.w)?p.w.slice(0,4).map(cp):[],
     actors:Array.isArray(p.a)?p.a.slice(0,4).map(cp):[],
@@ -5231,9 +5294,9 @@ async function loadShareFromHash(){
 }
 
 function renderShareView(shareState){
-  const un=shareState.userName;
-  document.getElementById('share-nav-title').textContent=(un?un+"'s":'Cinematic')+' Mount Rushmore';
-  document.title=(un?un+"'s ":'')+'Cinematic Mount Rushmore';
+  const un=shareState.userName, filter=shareState.filter||'';
+  document.getElementById('share-nav-title').textContent=(un?un+"'s":'Cinematic')+' Mount Rushmore'+(filter?' · '+filter:'');
+  document.title=(un?un+"'s ":'')+'Cinematic Mount Rushmore'+(filter?' · '+filter:'');
   const genres=shareState.genres||[];
   const strip=document.getElementById('share-genre-strip');
   if(genres.length){
@@ -5243,14 +5306,14 @@ function renderShareView(shareState){
     ).join('');
   } else { strip.style.display='none'; }
   ['directors','writers','actors'].forEach(cat=>{
-    document.getElementById('share-cat-'+cat).innerHTML=renderShareCatPanel(shareState[cat]||[],cat,un);
+    document.getElementById('share-cat-'+cat).innerHTML=renderShareCatPanel(shareState[cat]||[],cat,un,filter);
   });
 }
 
-function renderShareCatPanel(data,cat,userName){
+function renderShareCatPanel(data,cat,userName,filter){
   const top4=data.slice(0,4);
   const label=CAT_LABELS[cat], icon=CAT_ICONS[cat];
-  const rushLabel=(userName?userName+"'s ":'')+label+' Mount Rushmore';
+  const rushLabel=rushmoreLabel(cat,userName,'',filter);
   if(!top4.length) return `<div style="text-align:center;padding:60px 0;color:#7d7d94"><div style="font-size:32px;margin-bottom:10px">${icon}</div><div>No ${label.toLowerCase()} data in this share.</div></div>`;
   const cards=top4.map((d,i)=>{
     const rc=RANK_COLORS[i]||'#9999bb';
