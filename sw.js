@@ -1,12 +1,13 @@
 // Service worker for the film database only.
 //
-// film-db.js is ~12 MB (6 MB over the wire). GitHub Pages caches it for ten
-// minutes, so most visits revalidate it before the page can start. This serves
-// the copy already on the device at once and refreshes it in the background:
-// a rebuilt database shows up on the visit after it lands. Everything else is
-// left to the browser, so the page itself is never stale.
-const CACHE = 'cmr-db-v1';
-const DB_PATH = /\/film-db\.js$/;
+// film-db-core.js (~3 MB over the wire) and film-db-tail.js (~4.5 MB) are the
+// database. GitHub Pages caches them for ten minutes, so most visits revalidate
+// the core before the page can start. This serves the copies already on the
+// device at once and refreshes them in the background: a rebuilt database shows
+// up on the visit after it lands. Everything else is left to the browser, so the
+// page itself is never stale.
+const CACHE = 'cmr-db-v2';   // v2: the split database; activate drops v1's film-db.js
+const DB_PATH = /\/film-db(-core|-tail)?\.js$/;
 
 self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => {
