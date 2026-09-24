@@ -1827,7 +1827,7 @@ function triggerDownload(filename,mime,data){
 //
 // Two tiers, because the answer needs a denominator the export can't provide:
 //   db   — reverse-index the built-in FILM_DB by director. Instant and key-free,
-//          but the DB is TMDB's top ~20k films by popularity, so it lists a
+//          but the DB is TMDB's top ~50k films by popularity, so it lists a
 //          director's notable work rather than everything they made.
 //   tmdb — fetch the real directing credits and keep the ones running 40+ min.
 //          Exact, but costs one request per credit, so it runs on demand.
@@ -5822,7 +5822,7 @@ function initApp(){
   loadShareFromHash().then(ok=>{ if(!ok){ showPage('page-upload'); renderResumeCard(); } });
 }
 
-// film-db.js is six megabytes. A service worker serves it from the browser's
+// film-db.js is twelve megabytes. A service worker serves it from the browser's
 // cache and refreshes it in the background, so a repeat visit paints at once and
 // a rebuilt database shows up on the visit after it lands. Same-origin only, and
 // skipped where service workers are unavailable (file://, private windows).

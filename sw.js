@@ -1,6 +1,6 @@
 // Service worker for the film database only.
 //
-// film-db.js is ~6 MB (2.8 MB over the wire). GitHub Pages caches it for ten
+// film-db.js is ~12 MB (6 MB over the wire). GitHub Pages caches it for ten
 // minutes, so most visits revalidate it before the page can start. This serves
 // the copy already on the device at once and refreshes it in the background:
 // a rebuilt database shows up on the visit after it lands. Everything else is
