@@ -52,6 +52,16 @@ body.no-posters .poster{display:none}
 .nav-tab.active{color:#c8a840;border-bottom-color:#c8a840}
 .nav-tab:hover:not(.active){color:#b2b2c4}
 .dir-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+/* The top four are a Rushmore: four across, equal widths, under the four faces.
+   As a wrapping row each card sized itself to its content (~300px), so four
+   never fit the 940px column and they fell into a ragged 2×2. At this width a
+   card is ~225px, so the stat labels tighten and a value that doesn't fit beside
+   its label drops below it. */
+.top4-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.top4-grid .card{padding:14px 13px}
+.top4-grid .stat-lbl{letter-spacing:1.2px!important}
+.top4-grid .card-score{font-size:16px!important}
+@media(max-width:900px){.top4-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.top4-grid .card{padding:18px 20px}}
 .also-chip{background:#0d0d1a;border:1px solid #1c1c2c;border-radius:8px;padding:8px 14px;display:inline-flex;gap:10px;align-items:center;font:inherit;cursor:pointer;transition:border-color .15s}
 .also-chip:hover{border-color:#3a3a52}
 .also-chip:focus-visible{outline:2px solid #c8a840;outline-offset:2px}
@@ -111,6 +121,7 @@ body.no-posters .poster{display:none}
   .btn-sm{padding:5px 10px;font-size:11px}
   .btn-gold{padding:11px 16px;font-size:14px}
   .dir-grid{grid-template-columns:1fr}
+  .top4-grid{grid-template-columns:1fr}
   .slider-group{min-width:calc(50% - 10px)}
   h1{font-size:clamp(28px,6vw,48px)!important}
   /* The action row is 426px wide at 375px: without wrapping it pushed the page
@@ -2230,8 +2241,8 @@ function fmtDuration(mins){
 }
 
 function coverageInnerHTML(name,ac){
-  const row=(right,pct)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;gap:8px">
-      <span style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Filmography</span>
+  const row=(right,pct)=>`<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;column-gap:8px;margin-bottom:3px;gap:8px">
+      <span class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Filmography</span>
       <span style="color:#a0a0b4;font-size:9px;white-space:nowrap">${right}</span>
     </div>
     <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
@@ -2374,15 +2385,15 @@ function personCardHTML(d,rank,cat,showPosters){
       </div>
       <div style="min-width:0;flex:1"><div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${personLinkHTML(d.name,`<span class="person-name">${esc(d.name)}</span>`)}</div>
         <div style="color:#a0a0b4;font-size:11px;margin-top:2px"><span class="mono">${d.ratedCount}</span> rated${d.filmCount>d.ratedCount?' · <span class="mono">'+(d.filmCount-d.ratedCount)+'</span> watched':''}${d.rewatchCount>0?' · <span class="mono">'+d.rewatchCount+'</span> rewatch'+(d.rewatchCount!==1?'es':''):''}</div>${cat==='directors'?completeBadgeHTML(d):''}</div>
-      <div style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</div>
+      <div class="card-score" style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</div>
     </div>
     <div style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px">
       <div>
-        <div style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
+        <div class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px">Avg Rating</div>${pipsHTML(d.avgRating,ac)}
       </div>
       <div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-          <span style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Volume × Quality</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;column-gap:8px;margin-bottom:3px">
+          <span class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Volume × Quality</span>
           <span style="color:#a0a0b4;font-size:9px">${d.ratedCount} rated · ★${d.avgRating.toFixed(2)}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
@@ -2390,8 +2401,8 @@ function personCardHTML(d,rank,cat,showPosters){
         </div>
       </div>
       <div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-          <span style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Vs the Crowd</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;column-gap:8px;margin-bottom:3px">
+          <span class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Vs the Crowd</span>
           <span style="color:#a0a0b4;font-size:9px">${d.hasCommunity?signed(d.affinityDelta)+'★ vs audience':'no audience data'}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
@@ -2399,8 +2410,8 @@ function personCardHTML(d,rank,cat,showPosters){
         </div>
       </div>
       <div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-          <span style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Vs Your Average</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;column-gap:8px;margin-bottom:3px">
+          <span class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Vs Your Average</span>
           <span style="color:#a0a0b4;font-size:9px">${signed(d.lift)}★ vs your ★${(d.lift!=null&&d.avgRating-d.lift||0).toFixed(2)}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
@@ -2408,8 +2419,8 @@ function personCardHTML(d,rank,cat,showPosters){
         </div>
       </div>
       <div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-          <span style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Peak</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;column-gap:8px;margin-bottom:3px">
+          <span class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase">Peak</span>
           <span style="color:#a0a0b4;font-size:9px">top ${Math.min(3,d.ratedCount)||0} · ★${(d.top3Avg||0).toFixed(2)}</span>
         </div>
         <div style="height:4px;background:#1a1a2a;border-radius:2px;overflow:hidden">
@@ -2418,7 +2429,7 @@ function personCardHTML(d,rank,cat,showPosters){
       </div>
       ${cat==='directors'?`<div class="cov-block" data-person="${esc(d.name)}" data-ac="${ac}">${coverageInnerHTML(d.name,ac)}</div>`:''}
     </div>
-    ${d.topFilms.length?`<div><div style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
+    ${d.topFilms.length?`<div><div class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
   </div>`;
 }
 
@@ -2460,7 +2471,7 @@ function renderCategoryPanel(cat){
       <button onclick="refineTopCoverage()" title="Fetch each director's full feature filmography from TMDB for exact coverage" style="background:none;border:1px solid #252535;border-radius:6px;padding:3px 10px;color:#a9a9bc;font-family:inherit;font-size:11px;cursor:pointer">⟳ Exact filmography</button>`:''}
     </div>
     <div class="ornament-rule">◆</div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:32px">${top4CardsHTML}</div>
+    <div class="top4-grid" style="margin-bottom:32px">${top4CardsHTML}</div>
     ${data.length>4?`<div class="ornament-rule">◆</div><div style="margin-bottom:32px"><div class="eyebrow" style="margin-bottom:12px">Also Considered</div><div style="display:flex;flex-wrap:wrap;gap:10px">${alsoHTML}</div></div>`:''}
     <div class="filmstrip-rule"></div>
     <div style="margin-bottom:16px">
