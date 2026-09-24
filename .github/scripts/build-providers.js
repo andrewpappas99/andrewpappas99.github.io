@@ -46,7 +46,10 @@ const CONCURRENCY = 8, RETRIES = 4;
 const RB_MAX = 3;   // the page shows three rent/buy storefronts at most
 const API = process.env.TMDB_API_BASE || 'https://api.themoviedb.org/3';   // swappable for a fake TMDB in tests
 
-const TOKEN = process.env.TMDB_TOKEN || '', KEY = process.env.TMDB_KEY || '';
+// The short v3 key pasted into TMDB_TOKEN works too: 32 hex characters, where the
+// read access token is a long JWT. It then has to go in the URL.
+let TOKEN = (process.env.TMDB_TOKEN || '').trim(), KEY = (process.env.TMDB_KEY || '').trim();
+if (/^[0-9a-f]{32}$/i.test(TOKEN)) { KEY = TOKEN; TOKEN = ''; }
 if (!TOKEN && !KEY) {
   console.error('Error: set TMDB_TOKEN (the API read access token) or TMDB_KEY in the environment.');
   process.exit(1);
@@ -161,7 +164,7 @@ async function main() {
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-  if (authFailed) { console.error('Error: TMDB rejected the credentials (401). Check the TMDB_TOKEN secret.'); process.exit(1); }
+  if (authFailed) { console.error(`Error: TMDB rejected the credentials (401). Check the TMDB_TOKEN secret (it looks like ${TOKEN ? 'a read access token' : 'a v3 API key'}, ${(TOKEN || KEY).length} characters).`); process.exit(1); }
   // A run where TMDB was mostly down would otherwise replace good files with thin ones
   if (failed > ids.length * 0.05) { console.error(`Error: ${failed} of ${ids.length} lookups failed; leaving the existing files alone.`); process.exit(1); }
 
