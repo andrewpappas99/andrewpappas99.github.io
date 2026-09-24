@@ -1,7 +1,9 @@
-# Weekly: bake "where is it streaming" into providers-<REGION>.js so visitors
-# without a TMDB key see it. The key lives only in the TMDB_TOKEN repository
-# secret; build-providers.js never prints or writes it.
-name: Streaming data
+# Weekly: rebuild the film database (film-db-core.js / film-db-tail.js), then
+# bake "where is it streaming" into providers-<REGION>.js from it, and commit
+# both. The key lives only in the TMDB_TOKEN repository secret; neither script
+# prints or writes it. build-db.js keeps a per-film cache between runs on the
+# db-cache branch, so a week's rebuild fetches only what changed.
+name: Weekly data
 
 on:
   schedule:
@@ -9,24 +11,57 @@ on:
   workflow_dispatch:        # the "Run workflow" button in the Actions tab
 
 permissions:
-  contents: write   # commit the new files, nothing else
+  contents: write   # commit the new files and the cache branch, nothing else
 
 concurrency:
-  group: providers
+  group: weekly-data
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
       REGIONS: US,GB,CA,AU
+      DB_COUNT: 60000
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Restore the build cache
+        run: |
+          # Outside the checkout, so it can never be committed to the site
+          CACHE="$RUNNER_TEMP/build-cache.json"; echo "CACHE=$CACHE" >> "$GITHUB_ENV"
+          if git fetch -q --depth 1 origin db-cache; then
+            git show FETCH_HEAD:build-cache.json.gz | gunzip > "$CACHE"
+            echo "Restored the cache ($(du -h "$CACHE" | cut -f1))"
+          else
+            echo "No cache yet: this run fetches every film"
+          fi
+
+      # A failed rebuild keeps last week's database and still refreshes streaming;
+      # the job is marked failed at the end so it isn't missed.
+      - name: Rebuild the film database
+        id: db
+        continue-on-error: true
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: node .github/scripts/build-db.js --out . --cache "$CACHE" --count "$DB_COUNT"
+
+      - name: Save the build cache
+        if: always()
+        run: |
+          [ -s "$CACHE" ] || exit 0
+          gzip -9 -c "$CACHE" > "$RUNNER_TEMP/build-cache.json.gz"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BLOB=$(git hash-object -w "$RUNNER_TEMP/build-cache.json.gz")
+          TREE=$(printf '100644 blob %s\tbuild-cache.json.gz\n' "$BLOB" | git mktree)
+          COMMIT=$(git commit-tree "$TREE" -m "Build cache")
+          git push -q -f origin "${COMMIT}:refs/heads/db-cache"
 
       - name: Fetch streaming availability
         env:
@@ -35,10 +70,16 @@ jobs:
 
       - name: Commit if anything changed
         run: |
-          git add providers-*.js
+          git add film-db-core.js film-db-tail.js providers-*.js
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Refresh streaming data"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git commit -q -m "Weekly data: film database and streaming"
+          git pull -q --rebase origin main
+          git push -q origin HEAD:main
+
+      - name: Flag a failed database rebuild
+        if: steps.db.outcome == 'failure'
+        run: |
+          echo "::error::The film database rebuild failed; last week's database was kept. See the 'Rebuild the film database' step."
+          exit 1
