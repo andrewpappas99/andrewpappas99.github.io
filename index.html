@@ -52,7 +52,9 @@ body.no-posters .poster{display:none}
 .nav-tab.active{color:#c8a840;border-bottom-color:#c8a840}
 .nav-tab:hover:not(.active){color:#b2b2c4}
 .dir-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
-.also-chip{background:#0d0d1a;border:1px solid #1c1c2c;border-radius:8px;padding:8px 14px;display:inline-flex;gap:10px;align-items:center}
+.also-chip{background:#0d0d1a;border:1px solid #1c1c2c;border-radius:8px;padding:8px 14px;display:inline-flex;gap:10px;align-items:center;font:inherit;cursor:pointer;transition:border-color .15s}
+.also-chip:hover{border-color:#3a3a52}
+.also-chip:focus-visible{outline:2px solid #c8a840;outline-offset:2px}
 .section-divider{border:none;border-top:1px solid #151525;margin:36px 0}
 .filmstrip-rule{height:24px;position:relative;overflow:hidden;margin:32px 0;background:repeating-linear-gradient(90deg,#0c0c1a 0px,#0c0c1a 10px,#141428 10px,#141428 20px)}
 .filmstrip-rule::before,.filmstrip-rule::after{content:'';position:absolute;left:0;right:0;height:7px;background:repeating-linear-gradient(90deg,transparent 0px,transparent 3px,#08080f 3px,#08080f 13px,transparent 13px,transparent 20px)}
@@ -73,8 +75,15 @@ body.no-posters .poster{display:none}
 .share-cat-section{margin-bottom:48px}
 .modal-bg{display:none;position:fixed;inset:0;background:#000000cc;z-index:999;align-items:center;justify-content:center;padding:20px}
 .modal-bg.open{display:flex}
-.modal-box{background:#0e0e1c;border:1px solid #252535;border-radius:14px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;padding:28px}
-.modal-close{float:right;background:none;border:none;color:#9595aa;font-size:20px;cursor:pointer;line-height:1}
+/* dvh where supported: on iOS Safari 90vh is measured with the toolbars hidden,
+   so a tall dialog ran under them and its top edge — the ✕ — went off-screen. */
+.modal-box{background:#0e0e1c;border:1px solid #252535;border-radius:14px;max-width:560px;width:100%;max-height:90vh;max-height:90dvh;overflow-y:auto;padding:28px}
+/* Positioned and stacked: the .eyebrow under it is position:relative, and a
+   positioned box paints over a float — so the label's full-width box sat on top
+   of the ✕ and took the click everywhere but its very edge. The padding gives
+   the ✕ a finger-sized target without moving the glyph. */
+.modal-close{float:right;position:relative;z-index:2;background:none;border:none;color:#9595aa;font-size:20px;cursor:pointer;line-height:1;padding:10px;margin:-10px -10px 0 6px}
+.modal-close:hover{color:#f0e8d8}
 /* Genre bar */
 .genre-bar{height:6px;border-radius:3px;background:#c8a840;transition:width .4s ease}
 /* Clickable filmography-coverage bar */
@@ -87,6 +96,11 @@ body.no-posters .poster{display:none}
 .hist-bar:hover:not(:disabled){opacity:.7}
 .hist-bar:disabled{cursor:default}
 .hist-bar:focus-visible,.hist-card:focus-visible{outline:2px solid #c8a840;outline-offset:2px}
+.person-link{background:none;border:none;padding:0;margin:0;font:inherit;color:inherit;cursor:pointer;max-width:100%;display:inline-flex;text-align:left}
+.person-link:hover>span{filter:brightness(1.3)}
+.person-link:focus-visible{outline:2px solid #c8a840;outline-offset:2px;border-radius:20px}
+.person-name{text-decoration:underline;text-decoration-color:#a0a0b455;text-underline-offset:2px}
+.person-link:hover .person-name{color:#f0e8d8}
 .hist-card{display:block;width:100%;text-align:left;background:none;border:none;padding:0;font:inherit;color:inherit;cursor:pointer;border-radius:12px}
 .hist-card:hover .hist-card-in{border-color:#3a3a52;background:#111124}
 /* Mobile */
@@ -205,6 +219,7 @@ body.no-posters .poster{display:none}
         <button class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cat-writers" id="tab-btn-writers" onclick="switchCat('writers')">✍️ Writers</button>
         <button class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cat-actors" id="tab-btn-actors" onclick="switchCat('actors')">🎭 Actors</button>
         <button class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cat-recs" id="tab-btn-recs" onclick="switchCat('recs')">🍿 Watch Next</button>
+        <button class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cat-takes" id="tab-btn-takes" onclick="switchCat('takes')">🔥 Hot Takes</button>
         <button class="nav-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cat-history" id="tab-btn-history" onclick="switchCat('history')">🗓 History</button>
       </div>
       <div style="flex:1"></div>
@@ -302,6 +317,7 @@ body.no-posters .poster{display:none}
   <div id="cat-writers"   class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="cat-actors"    class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="cat-recs"      class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
+  <div id="cat-takes"     class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
   <div id="cat-history"   class="wrap" style="padding-top:28px;padding-bottom:60px;display:none"></div>
 </div>
 
@@ -383,7 +399,7 @@ const RANK_COLORS = ['#ffd700','#d4d4d4','#cd7f32','#9999bb'];
 const CAT_LABELS  = { directors:'Directors', writers:'Writers', actors:'Actors' };
 const CAT_ICONS   = { directors:'🎬', writers:'✍️', actors:'🎭' };
 const CATS        = ['directors','writers','actors'];   // scored person categories
-const TABS        = [...CATS,'recs','history'];         // + recommendations and the diary timeline
+const TABS        = [...CATS,'recs','takes','history']; // + recommendations, hot takes and the diary timeline
 const TMDB_GENRES = {28:'Action',12:'Adventure',16:'Animation',35:'Comedy',80:'Crime',99:'Documentary',18:'Drama',10751:'Family',14:'Fantasy',36:'History',27:'Horror',10402:'Music',9648:'Mystery',10749:'Romance',878:'Sci-Fi',53:'Thriller',10752:'War',37:'Western',10770:'TV Movie'};
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 // Same list build-db.js uses; hoisted so it isn't rebuilt on every film lookup
@@ -1207,6 +1223,7 @@ function applySavedData(d){
   if(d.recMode&&REC_MODES[d.recMode]) STATE.recMode=d.recMode;
   if(d.recSource==='directors'||d.recSource==='watchlist'||d.recSource==='owned') STATE.recSource=d.recSource;
   mergeOwned(d.owned);
+  mergeHidden(d.hidden);
   if(WL_RUNTIMES.includes(d.wlMaxRuntime)) STATE.wlMaxRuntime=d.wlMaxRuntime;
   if(typeof d.recPeople==='boolean') STATE.recPeople=d.recPeople;
   if(typeof d.wlStreamOnly==='boolean') STATE.wlStreamOnly=d.wlStreamOnly;
@@ -1420,6 +1437,7 @@ async function startAnalysis(){
 // Genres, the global mean and conformity always describe the whole library, and
 // _byDirAll keeps each director's unfiltered films for coverage.
 function rescoreFromState(){
+  STATE._history=null;   // new lookups reach the History tab too (it caches crew per viewing)
   const all=buildPersonMaps(STATE._films,STATE._filmData);
   STATE._matchedFilms=STATE._films.filter(f=>STATE._filmData[f.name+'||'+f.year]).length;
   STATE._byDirAll=all.byDir;
@@ -1574,7 +1592,7 @@ async function forgetSession(){
   try{
     for(const k of Object.keys(localStorage)) if(k.startsWith('cmr_')) localStorage.removeItem(k);
   }catch(e){}
-  _prov=null; SERVICES={}; _regionOverride=null; _jwLocale=null; STATE._filmog={}; _owned=null;
+  _prov=null; SERVICES={}; _regionOverride=null; _jwLocale=null; STATE._filmog={}; _owned=null; _hidden=null; _streamSeen=null; _streamNew=null;
   const ki=document.getElementById('tmdb-key-input'); if(ki) ki.value='';
   const kb=document.getElementById('tmdb-saved-badge'); if(kb) kb.style.display='none';
   updateConfigBadge();
@@ -1655,6 +1673,8 @@ function buildSavePayload(){
     watchlist:STATE._watchlist?{films:STATE._watchlist.films,data:STATE._watchlist.data}:null,
     // The owned-films list lives in this browser on its own; a save file carries a copy
     owned:ownedList().films.length?{films:ownedList().films,data:ownedList().data}:null,
+    // Films marked "not interested" on Watch Next
+    hidden:Object.keys(hiddenMap()).length?hiddenMap():null,
     weights:Object.assign({},WEIGHTS),
     wlWeights:Object.assign({},WL_WEIGHTS),
     recMode:STATE.recMode, recSource:STATE.recSource, wlMaxRuntime:STATE.wlMaxRuntime, recPeople:STATE.recPeople, wlStreamOnly:STATE.wlStreamOnly,
@@ -2352,7 +2372,7 @@ function personCardHTML(d,rank,cat,showPosters){
         <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:${ac}88;line-height:1">No.</div>
         <div style="font-family:'Playfair Display',Georgia,serif;font-style:italic;font-size:26px;line-height:1;color:${ac};margin-top:1px">${rank}</div>
       </div>
-      <div style="min-width:0;flex:1"><div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(d.name)}</div>
+      <div style="min-width:0;flex:1"><div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${personLinkHTML(d.name,`<span class="person-name">${esc(d.name)}</span>`)}</div>
         <div style="color:#a0a0b4;font-size:11px;margin-top:2px"><span class="mono">${d.ratedCount}</span> rated${d.filmCount>d.ratedCount?' · <span class="mono">'+(d.filmCount-d.ratedCount)+'</span> watched':''}${d.rewatchCount>0?' · <span class="mono">'+d.rewatchCount+'</span> rewatch'+(d.rewatchCount!==1?'es':''):''}</div>${cat==='directors'?completeBadgeHTML(d):''}</div>
       <div style="color:${ac};font-size:18px;font-weight:bold;flex-shrink:0;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</div>
     </div>
@@ -2421,7 +2441,7 @@ function renderCategoryPanel(cat){
 
   const top4Posters=anyPoster(top4.flatMap(cardFilms),filmPosterOf);
   const top4CardsHTML=top4.map((d,i)=>personCardHTML(d,i+1,cat,top4Posters)).join('');
-  const alsoHTML=data.slice(4,14).map((d,i)=>`<div class="also-chip"><span style="color:#7d7d94;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(d.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</span></div>`).join('');
+  const alsoHTML=data.slice(4,14).map((d,i)=>`<button type="button" class="also-chip" onclick="openPersonModal(${esc(JSON.stringify(d.name))})" aria-label="${esc('#'+(i+5)+' '+d.name+' — your films with them')}"><span style="color:#7d7d94;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(d.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(d.score*100).toFixed(1)}</span></button>`).join('');
 
   return `
     <div style="margin-bottom:16px">
@@ -2692,6 +2712,7 @@ function pumpProviders(){
         c[it.k]=rec;
         if(!it.tmdbId&&rec.id) c[provKey(it.title,it.year,rec.id)]=rec;
         saveProvCache();
+        noteStreamingChange(it.k,it.title,it.year,rec);
         paintProviderSlots(it.k);
       })
       .catch(e=>{
@@ -2729,6 +2750,84 @@ function retryProvider(k){
     el.innerHTML=providerLineHTML(null);
     queueProviders([{title:el.dataset.t,year:Number.isFinite(y)?y:null,tmdbId:parseInt(el.dataset.id,10)||null}]);
   });
+}
+
+// ─── Newly streaming ──────────────────────────────────────────────────────────
+// Each lookup is compared with what the same film showed last time. A service it
+// wasn't on before is news; the very first lookup of a film only sets the
+// baseline, so a fresh watchlist doesn't announce everything at once. Lookups
+// repeat when the cached answer expires (PROV_TTL), so this notices a change
+// within a few days of it, for the films you actually look at.
+var STREAM_SEEN_KEY='cmr_stream_seen_v1', STREAM_NEW_KEY='cmr_stream_new_v1';
+const STREAM_NEW_DAYS=30, STREAM_SEEN_MAX=3000;
+var _streamSeen=null, _streamNew=null;
+function loadStreamMap(key){
+  try{ const v=JSON.parse(localStorage.getItem(key)||'{}'); return v&&typeof v==='object'&&!Array.isArray(v)?v:{}; }catch(e){ return {}; }
+}
+function streamSeen(){ return _streamSeen||(_streamSeen=loadStreamMap(STREAM_SEEN_KEY)); }
+function streamNewMap(){ return _streamNew||(_streamNew=loadStreamMap(STREAM_NEW_KEY)); }
+function saveStreamState(){
+  try{
+    const seen=streamSeen(), keys=Object.keys(seen);
+    if(keys.length>STREAM_SEEN_MAX) keys.sort((a,b)=>(seen[a].at||0)-(seen[b].at||0)).slice(0,keys.length-STREAM_SEEN_MAX).forEach(k=>delete seen[k]);
+    const nw=streamNewMap(), cutoff=Date.now()-STREAM_NEW_DAYS*86400000;
+    for(const k in nw) if(!(nw[k].at>cutoff)) delete nw[k];
+    localStorage.setItem(STREAM_SEEN_KEY,JSON.stringify(seen));
+    if(Object.keys(nw).length) localStorage.setItem(STREAM_NEW_KEY,JSON.stringify(nw)); else localStorage.removeItem(STREAM_NEW_KEY);
+  }catch(e){ /* quota — the in-memory copy still serves this session */ }
+}
+function noteStreamingChange(k,title,year,rec){
+  if(!rec||rec.error||rec.none) return;
+  const offers=streamOffers(rec), ids=offers.map(o=>String(o[0]));
+  const seen=streamSeen(), before=seen[k], nw=streamNewMap();
+  seen[k]={ids,at:Date.now()};
+  if(before&&Array.isArray(before.ids)){
+    const fresh=offers.filter(o=>!before.ids.includes(String(o[0])));
+    if(fresh.length){
+      const prev=nw[k]&&Array.isArray(nw[k].o)?nw[k].o:[];
+      const o=prev.concat(fresh.filter(x=>!prev.some(p=>String(p[0])===String(x[0])))).map(x=>[x[0],String(x[1]).slice(0,40)]);
+      nw[k]={t:String(title).slice(0,200),y:Number.isFinite(year)?year:null,o,at:Date.now()};
+    }
+  }
+  // A service it has since left is no longer news
+  if(nw[k]){ nw[k].o=nw[k].o.filter(o=>ids.includes(String(o[0]))); if(!nw[k].o.length) delete nw[k]; }
+  saveStreamState();
+}
+// What arrived on your services (any service, with none picked) for this film
+function newOffersFor(title,year,tmdbId){
+  const nw=streamNewMap(), cutoff=Date.now()-STREAM_NEW_DAYS*86400000;
+  const e=nw[provKey(title,year,tmdbId)]||(tmdbId?nw[provKey(title,year,null)]:null);
+  if(!e||!(e.at>cutoff)||!Array.isArray(e.o)) return null;
+  const mine=Object.keys(SERVICES);
+  const o=mine.length?e.o.filter(x=>mine.includes(String(x[0]))):e.o;
+  return o.length?{o,at:e.at}:null;
+}
+function dismissNewStreaming(title,year,tmdbId){
+  const nw=streamNewMap();
+  delete nw[provKey(title,year,tmdbId)]; if(tmdbId) delete nw[provKey(title,year,null)];
+  saveStreamState(); renderRecsPanel();
+}
+// The watchlist's films with news, newest first
+function newlyStreaming(ranked){
+  if(!getKey('tmdb')) return [];
+  const out=[];
+  for(const x of ranked){ const n=newOffersFor(x.f.name,x.f.year,x.d.tmdbId); if(n) out.push(Object.assign({x},n)); }
+  return out.sort((a,b)=>b.at-a.at);
+}
+function newlyStreamingHTML(r){
+  const list=newlyStreaming(r.ranked);
+  if(!list.length) return '';
+  return `<div style="background:#0f1a14;border:1px solid #6fbf8f44;border-radius:10px;padding:12px 16px;margin-bottom:18px">
+    <div style="color:#6fbf8f;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin-bottom:8px">🆕 Newly streaming${Object.keys(SERVICES).length?' on your services':''}</div>
+    ${list.map(n=>`<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:4px 0">
+      <span style="color:#f0e8d8;font-size:13px">${esc(n.x.f.name)}</span>
+      <span class="mono" style="color:#7d7d94;font-size:11px">${Number.isFinite(n.x.f.year)?n.x.f.year:''}</span>
+      <span style="color:#6fbf8f;font-size:12px">now on ${n.o.map(o=>esc(o[1])).join(', ')}</span>
+      <span style="color:#7d7d94;font-size:11px">· noticed ${fmtSince((Date.now()-n.at)/86400000)}</span>
+      <button type="button" onclick="dismissNewStreaming(${esc(JSON.stringify(n.x.f.name))},${Number.isFinite(n.x.f.year)?n.x.f.year:'null'},${n.x.d.tmdbId||'null'})" aria-label="${esc('Dismiss '+n.x.f.name)}" style="background:none;border:none;color:#7d7d94;cursor:pointer;font-family:inherit;font-size:11px;text-decoration:underline;margin-left:auto">dismiss</button>
+    </div>`).join('')}
+    <div style="color:#7d7d94;font-size:11px;margin-top:6px">Spotted when a film's streaming info refreshes, every few days for the films you view. Kept for ${STREAM_NEW_DAYS} days.</div>
+  </div>`;
 }
 
 function resetProviders(){
@@ -2900,7 +2999,7 @@ function buildRecommendations(mode){
   // under every genre; with a filter on, unknown means excluded.
   const inGenre=g=>!ag||(!!g&&g.split(',').indexOf(ag)>=0);
   const add=(f,info)=>{
-    if(!inGenre(f.g)||!inDecade(f.y)) return;
+    if(!inGenre(f.g)||!inDecade(f.y)||isHidden(f.title,f.y)) return;
     const k=f.t+'#'+f.y, prev=cands.get(k);
     if(prev){ if(info.cov&&!prev.cov) Object.assign(prev,info); else if(info.via&&!prev.via) prev.via=info.via; return; }
     cands.set(k,Object.assign({f},info));
@@ -2997,7 +3096,7 @@ function recCardHTML(r,i,gMean,showPosters){
   // Shown whenever an actor or writer brought the film in, even when the
   // director's coverage bar is there too — both reasons are worth a line.
   const viaLine=r.via
-    ? `<div style="color:#9595aa;font-size:11px;margin-bottom:10px">Because you like ${r.via.role==='actor'?'🎭':'✍️'} <span style="color:#c8c0b0">${esc(r.via.name)}</span></div>`
+    ? `<div style="color:#9595aa;font-size:11px;margin-bottom:10px">Because you like ${personLinkHTML(r.via.name,`${r.via.role==='actor'?'🎭':'✍️'} <span style="color:#c8c0b0;text-decoration:underline;text-decoration-color:#c8c0b055;text-underline-offset:2px">${esc(r.via.name)}</span>`)}</div>`
     : '';
   return `<div class="card" style="border:1px solid ${ac}22">
     <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:6px">
@@ -3005,7 +3104,7 @@ function recCardHTML(r,i,gMean,showPosters){
       ${posterHTML(r.poster,r.title,40,showPosters)}
       <div style="flex:1;min-width:0">
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(r.title)}</div>
-        <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${[Number.isFinite(r.year)?r.year:'—',r.director?esc(r.director):'',r.runtime?fmtDuration(r.runtime):''].filter(Boolean).join(' · ')}</div>
+        <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${[Number.isFinite(r.year)?r.year:'—',r.director?(r.s.dirE?personLinkHTML(r.director,`<span class="person-name">${esc(r.director)}</span>`):esc(r.director)):'',r.runtime?fmtDuration(r.runtime):''].filter(Boolean).join(' · ')}</div>
       </div>
     </div>
     ${r.covTotal!=null?`<div style="color:#9595aa;font-size:11px;margin-bottom:9px">
@@ -3019,6 +3118,7 @@ function recCardHTML(r,i,gMean,showPosters){
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <a href="${esc(search)}" target="_blank" rel="noopener noreferrer" style="color:${ac};font-size:11px;text-decoration:none;border-bottom:1px solid ${ac}44">Find on Letterboxd →</a>
       ${justWatchLinkHTML(r.title,ac)}
+      ${hideBtnHTML(r.title,r.year)}
     </div>
   </div>`;
 }
@@ -3080,7 +3180,7 @@ function renderRecsPanel(){
   if(!recs.length){
     el.innerHTML=header+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">Nothing to recommend${anyFilter()?' in '+esc(filterLabel()):''} — you've seen everything we know of.</div>
-      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>`;
+      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>${hiddenListHTML()}`;
     return;
   }
   const gMean=buildTasteProfile().gMean;
@@ -3094,6 +3194,7 @@ function renderRecsPanel(){
       </div>
       <button class="btn-ghost btn-sm" onclick="exportLetterboxdList('recs')" title="Download these as a CSV that Letterboxd imports as a list">↓ Letterboxd list</button>
     </div>
+    ${hiddenListHTML()}
     ${blindSpotsHTML()}`;
 }
 
@@ -3407,8 +3508,9 @@ function rankCurrent(){ return STATE.recSource==='owned'?rankOwned():rankWatchli
 // `stream` is false for the collection: films you own need no streaming check
 // `rewatch` ranks films you've seen too, pushed down by how recently (see rewatchPenalty)
 function rankList(wl,stream,rewatch){
-  const out={ranked:[],seen:0,seenFilms:[],unmatched:[],hiddenByGenre:0,hiddenByRuntime:0,hiddenByStream:0,streamUnknown:0,awaiting:[]};
+  const out={ranked:[],seen:0,seenFilms:[],unmatched:[],hiddenByGenre:0,hiddenByRuntime:0,hiddenByStream:0,streamUnknown:0,notInterested:0,awaiting:[]};
   if(!wl) return out;
+  const skipHidden=wl!==_owned;   // "not interested" is for picks, not films on your shelf
   const taste=buildTasteProfile(), seenIdx=librarySeenIndex(), ag=STATE._activeGenre;
   const lastIdx=rewatch?lastWatchedIndex():null;
   out.gMean=taste.gMean;
@@ -3419,6 +3521,7 @@ function rankList(wl,stream,rewatch){
       if(!rewatch){ out.seenFilms.push(f); continue; }
       rw=rewatchPenalty(lastWatchedOf(lastIdx,f));
     }
+    if(skipHidden&&isHidden(f.name,f.year)){ out.notInterested++; continue; }
     const d=wl.data[f.name+'||'+f.year];
     if(!d){ out.unmatched.push(f); continue; }
     if((ag&&!(d.genres||[]).includes(ag))||!inDecade(f.year)){ out.hiddenByGenre++; continue; }
@@ -3448,17 +3551,104 @@ function wlPersonTip(role,name,e,gMean){
     : `${role} ${name}: you've watched ${e.count} of their films without rating them.`;
 }
 
+// ─── Your history with one person ─────────────────────────────────────────────
+// Every name on a Watch Next card opens this: what of theirs you've logged and how
+// you rated it, best first. Read from the whole library (the same maps the taste
+// scores use, so the ★ on the chip and the films here always agree), never the
+// genre- or decade-filtered lists.
+function personHistory(name){
+  const maps=STATE._films&&STATE._filmData
+    ? buildPersonMaps(STATE._films,STATE._filmData)
+    : {byDir:STATE._byDir||{},byWriter:STATE._byWriter||{},byActor:STATE._byActor||{},globalMean:STATE._globalMean??3.5};
+  const roles=[], byKey=new Map();
+  for(const [k,label,m] of [['director','Director',maps.byDir],['writer','Writer',maps.byWriter],['actor','Actor',maps.byActor]]){
+    const list=m[name];
+    if(!list||!list.length) continue;
+    roles.push({k,label,n:list.length});
+    for(const f of list){
+      const key=f.name+'||'+f.year, e=byKey.get(key)||{f,roles:[]};
+      e.roles.push(k); byKey.set(key,e);
+    }
+  }
+  const films=[...byKey.values()].sort((a,b)=>(b.f.rating-a.f.rating)||((b.f.rewatchCount||0)-(a.f.rewatchCount||0))||a.f.name.localeCompare(b.f.name));
+  const rated=films.filter(e=>e.f.rating>0);
+  return {name,roles,films,rated,top:rated.slice(0,3),
+    avg:rated.length?rated.reduce((s,e)=>s+e.f.rating,0)/rated.length:null,
+    gMean:maps.globalMean??3.5,
+    rewatches:films.reduce((s,e)=>s+(e.f.rewatchCount||0),0)};
+}
+
+// A name that opens its history. `inner` is already-escaped HTML.
+function personLinkHTML(name,inner,label){
+  return `<button type="button" class="person-link" onclick="openPersonModal(${esc(JSON.stringify(name))})" aria-label="${esc(label||('Your films with '+name))}">${inner}</button>`;
+}
+
+function openPersonModal(name){
+  const body=document.getElementById('person-modal-body');
+  if(!body) return;
+  body.innerHTML=personModalHTML(personHistory(name));
+  if(!document.getElementById('person-modal').classList.contains('open')) openModalEl('person-modal');
+}
+
+function personModalHTML(h){
+  const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
+  const roleTag=e=>h.roles.length>1?`<span style="color:#7d7d94;font-size:10px">${e.roles.map(k=>({director:'dir.',writer:'writer',actor:'cast'})[k]).join(' · ')}</span>`:'';
+  if(!h.films.length) return `<div class="eyebrow" style="margin-bottom:10px">Your history</div>
+    <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:8px">${esc(h.name)}</h2>
+    <div style="color:#a0a0b4;font-size:13px">Nothing of theirs in your library yet.</div>`;
+  // Where they stand on your Rushmores — only when the lists aren't filtered to a slice
+  const ranks=anyFilter()?[]:h.roles.map(r=>{
+    const cat={director:'directors',writer:'writers',actor:'actors'}[r.k];
+    const i=(STATE[cat]||[]).findIndex(d=>d.name===h.name);
+    return i>=0?`#${i+1} of your ${CAT_LABELS[cat].toLowerCase()}`:'';
+  }).filter(Boolean);
+  const sp=anyPoster(h.films.map(e=>e.f),filmPosterOf);
+  const topCard=(e,i)=>`<div style="flex:1;min-width:140px;max-width:200px;background:#0d0d1c;border:1px solid ${RANK_COLORS[i]}33;border-radius:10px;padding:10px;display:flex;gap:10px;align-items:flex-start">
+      ${posterHTML(filmPosterOf(e.f),e.f.name,44,sp)}
+      <div style="min-width:0">
+        <div style="color:${RANK_COLORS[i]};font-size:10px;font-weight:700;letter-spacing:1px">#${i+1}</div>
+        <div style="color:#f0e8d8;font-size:13px;font-weight:600;line-height:1.3">${esc(e.f.name)}</div>
+        <div style="color:#83839b;font-size:11px">${Number.isFinite(e.f.year)?e.f.year:'—'}</div>
+        <div style="color:#c8a840;font-size:12px;margin-top:3px">${stars(e.f.rating)}</div>
+        ${e.f.rewatchCount?`<div style="color:#7d7d94;font-size:10px">↻ ${e.f.rewatchCount} rewatch${e.f.rewatchCount!==1?'es':''}</div>`:''}
+        ${roleTag(e)}
+      </div></div>`;
+  const row=e=>`<div style="display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #14141f">
+      ${posterHTML(filmPosterOf(e.f),e.f.name,22,sp)}
+      <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${Number.isFinite(e.f.year)?e.f.year:'—'}</span>
+      <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(e.f.name)} ${roleTag(e)}</span>
+      ${e.f.rewatchCount?`<span style="color:#7d7d94;font-size:10px;flex-shrink:0">↻${e.f.rewatchCount}</span>`:''}
+      <span style="color:${e.f.rating>0?'#c8a840':'#7d7d94'};font-size:11px;flex-shrink:0">${e.f.rating>0?stars(e.f.rating):'watched'}</span>
+    </div>`;
+  const summary=[h.roles.map(r=>`${r.label} on ${r.n} film${r.n!==1?'s':''}`).join(' · '),
+    h.avg!=null?`you average <b style="color:#c8a840">★${h.avg.toFixed(2)}</b> against your overall ★${h.gMean.toFixed(2)}`:'none rated yet',
+    h.rewatches?`${h.rewatches} rewatch${h.rewatches!==1?'es':''}`:''].filter(Boolean).join(' · ');
+  const filmogBtn=h.roles.some(r=>r.k==='director')&&dirByName(h.name)
+    ? `<button class="btn-ghost btn-sm" style="margin-top:14px" onclick="closeModalEl('person-modal');openFilmogModal(${esc(JSON.stringify(h.name))})">Their filmography — what you haven't seen →</button>`:'';
+  return `<div class="eyebrow" style="margin-bottom:10px">Your history</div>
+    <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:6px">${esc(h.name)}</h2>
+    <div style="color:#a0a0b4;font-size:12px;line-height:1.7;margin-bottom:${ranks.length?4:16}px">${summary}</div>
+    ${ranks.length?`<div style="color:#8c8ca2;font-size:11px;margin-bottom:16px">${ranks.join(' · ')}</div>`:''}
+    ${h.top.length?`<div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Your top ${h.top.length}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">${h.top.map(topCard).join('')}</div>`:''}
+    <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Everything you've logged <span style="color:#8c8ca2">(${h.films.length})</span></div>
+    ${h.films.map(row).join('')}
+    ${filmogBtn}`;
+}
+
 function tasteChips(s,d,title,year,gMean,chip){
   const pTxt=(icon,n,e)=>`${icon} ${esc(n)}${e.rated?` · ★${e.avg.toFixed(1)}`:''}`;
+  // Person chips open your history with them; genre and rating chips stay plain
+  const pchip=(name,txt,col,tip)=>personLinkHTML(name,chip(txt,col,tip+' Click for the films.'),'Your films with '+name);
   const chips=[];
   // The last film standing between you and a 100% filmography — and its bonus
   const dd=d.director?dirByName(d.director):null, cov=dd?getCoverage(dd):null;
   if(cov&&cov.missing.length===1&&sameFilm(cov.missing[0],{t:normTitle(title),y:year}))
     chips.push(chip(`🏁 Completes ${esc(d.director)}`,'#6fbf8f',`The only feature of ${d.director}'s you haven't seen${cov.source==='tmdb'&&COMPLETION_BONUS?` — watching it earns the +${COMPLETION_BONUS} completion bonus`:cov.source==='tmdb'?'':' that the built-in database knows of'}.`));
-  if(s.dirE&&s.dirE.v>=0.2) chips.push(chip(pTxt('🎬',d.director,s.dirE),'#c8a840',wlPersonTip('Director',d.director,s.dirE,gMean)));
-  else if(s.dirE&&s.dirE.v<=-0.15) chips.push(chip(`🎬 ${esc(d.director)} · below your avg`,'#b07878',wlPersonTip('Director',d.director,s.dirE,gMean)));
-  s.writers.filter(w=>w.e.v>=0.2).slice(0,1).forEach(w=>chips.push(chip(pTxt('✍️',w.n,w.e),'#9fb0d0',wlPersonTip('Writer',w.n,w.e,gMean))));
-  s.actors.filter(a=>a.e.v>=0.2).slice(0,2).forEach(a=>chips.push(chip(pTxt('🎭',a.n,a.e),'#c0a0d0',wlPersonTip('Actor',a.n,a.e,gMean))));
+  if(s.dirE&&s.dirE.v>=0.2) chips.push(pchip(d.director,pTxt('🎬',d.director,s.dirE),'#c8a840',wlPersonTip('Director',d.director,s.dirE,gMean)));
+  else if(s.dirE&&s.dirE.v<=-0.15) chips.push(pchip(d.director,`🎬 ${esc(d.director)} · below your avg`,'#b07878',wlPersonTip('Director',d.director,s.dirE,gMean)));
+  s.writers.filter(w=>w.e.v>=0.2).slice(0,1).forEach(w=>chips.push(pchip(w.n,pTxt('✍️',w.n,w.e),'#9fb0d0',wlPersonTip('Writer',w.n,w.e,gMean))));
+  s.actors.filter(a=>a.e.v>=0.2).slice(0,2).forEach(a=>chips.push(pchip(a.n,pTxt('🎭',a.n,a.e),'#c0a0d0',wlPersonTip('Actor',a.n,a.e,gMean))));
   s.genres.filter(g=>g.e.v>=0.25).slice(0,1).forEach(g=>chips.push(chip(`🎞 ${esc(g.n)}`,'#80b0b0',
     `${g.n}: ${Math.round(g.e.share*100)}% of your library${g.e.rated?`, rated ★${g.e.avg.toFixed(2)} on average`:''}.`)));
   if(d.voteAvg>=3.75) chips.push(chip(`★${d.voteAvg.toFixed(1)} on TMDB`,'#8888aa','Community rating on TMDB, on a 5-star scale.'));
@@ -3472,12 +3662,14 @@ function wlCardHTML(x,i,gMean,showPosters,owned){
   const col=s.match>=70?'#6fbf8f':s.match>=55?'#c8a840':'#8888aa';
   const chip=(txt,c,tip)=>`<span title="${esc(tip||'')}" style="background:${c}14;border:1px solid ${c}33;color:${c};border-radius:20px;padding:2px 9px;font-size:10px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis">${txt}</span>`;
   const chips=tasteChips(s,d,f.name,f.year,gMean,chip);
+  const fresh=owned?null:newOffersFor(f.name,f.year,d.tmdbId);
+  if(fresh) chips.unshift(chip(`🆕 Now on ${esc(fresh.o[0][1])}${fresh.o.length>1?' +'+(fresh.o.length-1):''}`,'#6fbf8f',`Newly streaming on ${fresh.o.map(o=>o[1]).join(', ')} — noticed ${fmtSince((Date.now()-fresh.at)/86400000)}.`));
   if(s.rewatch){
     const pts=Math.round(s.rewatch.penalty*50);
     chips.unshift(chip(`↻ Seen ${s.rewatch.date?fmtSince(s.rewatch.days):'before'}${pts?` · −${pts}`:''}`,'#b08a60',
       `A rewatch — ${s.rewatch.date?`last watched ${s.rewatch.date}`:'logged without a date, so treated as five years ago'}. It drops ${pts} match point${pts!==1?'s':''}; the more recent the watch, the bigger the drop.`));
   }
-  const meta=[Number.isFinite(f.year)?String(f.year):'', d.director?'dir. '+esc(d.director):'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
+  const meta=[Number.isFinite(f.year)?String(f.year):'', d.director?'dir. '+(s.dirE?personLinkHTML(d.director,`<span class="person-name">${esc(d.director)}</span>`):esc(d.director)):'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
   const W=WL_AXES.map(a=>`${a.label} ${s.ax[a.k]>=0?'+':''}${s.ax[a.k].toFixed(2)}`).join(', ');
   const lb=f.uri||`https://letterboxd.com/search/films/${encodeURIComponent(f.name)}/`;
   return `<div class="card" style="border:1px solid ${col}22">
@@ -3498,7 +3690,7 @@ function wlCardHTML(x,i,gMean,showPosters,owned){
     ${owned?'':providerSlotHTML(f.name,f.year,d.tmdbId)}
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <a href="${esc(lb)}" target="_blank" rel="noopener noreferrer" style="color:${col};font-size:11px;text-decoration:none;border-bottom:1px solid ${col}44">Letterboxd →</a>
-      ${owned?'<span style="color:#7d7d94;font-size:11px">📀 In your collection</span>':justWatchLinkHTML(f.name,col)}
+      ${owned?'<span style="color:#7d7d94;font-size:11px">📀 In your collection</span>':justWatchLinkHTML(f.name,col)+hideBtnHTML(f.name,f.year)}
     </div>
   </div>`;
 }
@@ -3531,6 +3723,7 @@ function watchlistListHTML(ranked){
         <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(f.name)}</span>${justWatchLinkHTML(f.name,'#9a9ab4','small')}</div>`).join('')}</div>
     </details>`);
   }
+  if(r.notInterested) parts.push(hiddenListHTML(new Set(wl.films.map(f=>hiddenKey(f.name,f.year)))));
   return parts.join('');
 }
 
@@ -3559,6 +3752,7 @@ function watchlistBodyHTML(){
     r.hiddenByRuntime?`${r.hiddenByRuntime} too long`:'',
     r.hiddenByStream?`${r.hiddenByStream} not on ${Object.keys(SERVICES).length?'your services':'streaming'}`:'',
     r.streamUnknown?`${r.streamUnknown} couldn't be checked`:'',
+    r.notInterested?`${r.notInterested} not interested`:'',
     r.unmatched.length&&!wl.pending?`${r.unmatched.length} without data`:''].filter(Boolean).join(' · ');
   const sliders=WL_AXES.map(a=>`<div class="slider-group" style="min-width:110px;flex:1">
       <label class="slider-label" for="sl-wl-${a.k}">${a.icon} ${a.label} <span id="lbl-wl-${a.k}" class="slider-val">${WL_WEIGHTS[a.k]}</span></label>
@@ -3597,6 +3791,7 @@ function watchlistBodyHTML(){
       </div>
       <div style="display:flex;gap:18px;flex-wrap:wrap">${sliders}</div>
     </div>
+    ${newlyStreamingHTML(r)}
     <div id="wl-list">${watchlistListHTML(r)}</div>`;
 }
 
@@ -3886,6 +4081,66 @@ function ownedBodyHTML(){
     <div id="wl-list">${ownedListHTML(r)}</div>`;
 }
 
+// ─── Not interested ───────────────────────────────────────────────────────────
+// A recommendation or watchlist film you've decided against used to stay until
+// you watched it. Hidden films are kept in this browser (and in a save file),
+// keyed by normalized title and year like the "already seen" check, and listed
+// at the foot of the page so any of them can be brought back.
+var HIDDEN_KEY='cmr_hidden_v1';
+var _hidden=null;   // var: read by buildSavePayload, which may run before this line is reached
+function sanitizeHidden(raw){
+  const out={};
+  if(!raw||typeof raw!=='object'||Array.isArray(raw)) return out;
+  for(const k of Object.keys(raw).slice(0,5000)){
+    const v=raw[k];
+    if(v&&typeof v.t==='string') out[String(k).slice(0,300)]={t:v.t.slice(0,200),y:Number.isFinite(v.y)?v.y:null,at:Number(v.at)||0};
+  }
+  return out;
+}
+function hiddenMap(){
+  if(!_hidden){ let raw=null; try{ raw=JSON.parse(localStorage.getItem(HIDDEN_KEY)||'null'); }catch(e){} _hidden=sanitizeHidden(raw); }
+  return _hidden;
+}
+function hiddenKey(title,year){ return normTitle(title)+'|'+(Number.isFinite(year)?year:''); }
+function isHidden(title,year){ return !!hiddenMap()[hiddenKey(title,year)]; }
+function saveHidden(){
+  try{ const h=hiddenMap(); if(Object.keys(h).length) localStorage.setItem(HIDDEN_KEY,JSON.stringify(h)); else localStorage.removeItem(HIDDEN_KEY); }catch(e){}
+  schedulePersist();
+}
+function hideFilm(title,year){
+  hiddenMap()[hiddenKey(title,year)]={t:String(title).slice(0,200),y:Number.isFinite(year)?year:null,at:Date.now()};
+  saveHidden();
+  renderRecsPanel();
+  // Hidden from inside Surprise me: draw another rather than keep showing it
+  const pk=document.getElementById('pick-modal');
+  if(pk&&pk.classList.contains('open')) surpriseMe();
+  showToast('Hidden — it’s listed under “Not interested” at the bottom if you change your mind');
+}
+function unhideFilm(k){ delete hiddenMap()[k]; saveHidden(); renderRecsPanel(); }
+// A save file's list is added to this browser's, like the collection
+function mergeHidden(raw){
+  const inc=sanitizeHidden(raw), h=hiddenMap();
+  let n=0; for(const k in inc) if(!h[k]){ h[k]=inc[k]; n++; }
+  if(n) saveHidden();
+}
+function hideBtnHTML(title,year){
+  return `<button type="button" onclick="hideFilm(${esc(JSON.stringify(String(title)))},${Number.isFinite(year)?year:'null'})" title="Not interested — hide it from Watch Next" aria-label="${esc('Not interested in '+title)}" style="background:none;border:none;padding:0;color:#7d7d94;font-family:inherit;font-size:11px;cursor:pointer;text-decoration:underline;text-decoration-color:#7d7d9455;margin-left:auto">Not interested</button>`;
+}
+// The hidden films that belong to the list on screen (`among` keeps those, when given)
+function hiddenListHTML(among){
+  const h=hiddenMap();
+  let keys=Object.keys(h);
+  if(among) keys=keys.filter(k=>among.has(k));
+  if(!keys.length) return '';
+  keys.sort((a,b)=>h[b].at-h[a].at);
+  return `<details style="margin-top:14px;color:#9595aa;font-size:12px">
+    <summary style="cursor:pointer">${keys.length} film${keys.length!==1?'s':''} you're not interested in</summary>
+    <div style="margin-top:10px">${keys.map(k=>`<div style="display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #14141f">
+      <span class="mono" style="color:#83839b;font-size:11px;width:36px;flex-shrink:0">${Number.isFinite(h[k].y)?h[k].y:'—'}</span>
+      <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:0">${esc(h[k].t)}</span>
+      <button type="button" class="btn-ghost btn-sm" style="padding:3px 10px;font-size:11px" onclick="unhideFilm(${esc(JSON.stringify(k))})">Bring back</button></div>`).join('')}</div></details>`;
+}
+
 // Per-category search, sort and "show more" state. Kept here rather than read
 // back from the inputs, so a slider drag (which rebuilds the panel) no longer
 // wipes what was typed.
@@ -3931,6 +4186,7 @@ function renderPanel(name){
     if(STATE[name].length) filterCat(name,true);
   }
   else if(name==='recs') renderRecsPanel();
+  else if(name==='takes') renderTakesPanel();
   else if(name==='history') renderHistoryPanel();
 }
 function renderResults(){
@@ -3985,6 +4241,194 @@ function missListHTML(){
       ${films.length?`<div>${films.map(row).join(' · ')}</div>`:''}
       ${series.length?`<div style="margin-top:6px;color:#8c8ca2">${series.length} look like TV series, which a film database never holds: ${series.map(row).join(' · ')}</div>`:''}
     </div></details>`;
+}
+
+// ─── Hot takes ────────────────────────────────────────────────────────────────
+// The films where your rating sits furthest from TMDB's average, both ways. The
+// data is already loaded for the "vs the crowd" score. Only films the built-in
+// database holds count: it is TMDB's most popular titles, so their averages rest
+// on real vote counts — an obscure film's 4.8 from six votes is not a crowd.
+// Follows the genre and decade chips like the Rushmore tabs.
+const HOT_MIN_DIFF=1.0, HOT_SHOWN=10, HOT_MIN_FILMS=10, HOT_AGREE=0.5, HOT_CARD_ROWS=5;
+function hotTakes(){
+  const films=STATE._films||[], fd=STATE._filmData||{};
+  const rows=[];
+  for(const f of films){
+    if(!(f.rating>0)) continue;
+    const d=fd[f.name+'||'+f.year];
+    if(!d||!(d.voteAvg>0)||!passesFilters(f,d)) continue;
+    if(!FILM_DB[f.name+'||'+f.year]&&!fuzzyDBMatch(f)) continue;
+    rows.push({f,d,crowd:d.voteAvg,diff:f.rating-d.voteAvg});
+  }
+  const n=rows.length;
+  // Biggest gap first; on a tie, the stronger feeling (a 5★ over a 4½★ love)
+  const loved=rows.filter(r=>r.diff>=HOT_MIN_DIFF).sort((a,b)=>(b.diff-a.diff)||(b.f.rating-a.f.rating)||a.f.name.localeCompare(b.f.name));
+  const panned=rows.filter(r=>r.diff<=-HOT_MIN_DIFF).sort((a,b)=>(a.diff-b.diff)||(a.f.rating-b.f.rating)||a.f.name.localeCompare(b.f.name));
+  return {n, loved, panned,
+    signed:n?rows.reduce((s,r)=>s+r.diff,0)/n:0,
+    agree:n?rows.filter(r=>Math.abs(r.diff)<=HOT_AGREE).length/n:0};
+}
+
+function hotRowHTML(r,i,sp,up){
+  const stars=x=>'★'.repeat(Math.floor(x))+(x%1>=0.5?'½':'');
+  const col=up?'#c8a840':'#9fb0d0';
+  const dir=r.d.director?personLinkHTML(r.d.director,`<span class="person-name">${esc(r.d.director)}</span>`):'';
+  return `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #14141f">
+    <span class="mono" style="color:#777787;font-size:11px;width:18px;flex-shrink:0">${i+1}</span>
+    ${posterHTML(filmPosterOf(r.f),r.f.name,30,sp)}
+    <div style="flex:1;min-width:0">
+      <div style="color:#f0e8d8;font-size:13px;font-weight:600;line-height:1.3">${esc(r.f.name)}</div>
+      <div style="color:#83839b;font-size:11px">${Number.isFinite(r.f.year)?r.f.year:'—'}${dir?' · '+dir:''}</div>
+    </div>
+    <div style="text-align:right;flex-shrink:0;line-height:1.4">
+      <div style="color:#c8a840;font-size:12px" title="Your rating">${stars(r.f.rating)}</div>
+      <div style="color:#7d7d94;font-size:10px" title="TMDB average, on a 5-star scale">crowd ★${r.crowd.toFixed(1)}</div>
+    </div>
+    <span class="mono" style="color:${col};background:${col}14;border:1px solid ${col}33;border-radius:20px;padding:2px 8px;font-size:11px;flex-shrink:0;min-width:44px;text-align:center">${r.diff>0?'+':'−'}${Math.abs(r.diff).toFixed(1)}</span>
+  </div>`;
+}
+
+function renderTakesPanel(){
+  const el=document.getElementById('cat-takes');
+  if(!el) return;
+  const h=hotTakes(), filt=filterLabel();
+  const head=`<div style="margin-bottom:18px">
+      <div class="eyebrow" style="margin-bottom:5px">🔥 Hot Takes</div>
+      <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc((STATE.userName?STATE.userName+"'s":'Your')+(filt?' '+filt:'')+' Hot Takes')}</h1>
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:640px">The films where your rating sits furthest from the TMDB average — at least a full star apart. Only well-known films count, so every crowd score rests on plenty of votes.</p>
+    </div>`;
+  if(h.n<HOT_MIN_FILMS){
+    el.innerHTML=head+`<div style="text-align:center;padding:50px 0;color:#7d7d94;font-size:14px">${h.n?`Only ${h.n} rated film${h.n!==1?'s':''}`:'No rated films'}${filt?' in '+esc(filt):''} have a crowd score to compare with — hot takes need at least ${HOT_MIN_FILMS}.</div>`;
+    return;
+  }
+  const sp=anyPoster([...h.loved,...h.panned].slice(0,HOT_SHOWN*2).map(r=>r.f),filmPosterOf);
+  const col=(title,sub,list,up)=>`<div style="flex:1;min-width:280px">
+      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase">${title} <span style="color:#8c8ca2">(${list.length})</span></div>
+      <div style="color:#7d7d94;font-size:11px;margin:3px 0 8px">${sub}</div>
+      ${list.length?list.slice(0,HOT_SHOWN).map((r,i)=>hotRowHTML(r,i,sp,up)).join(''):`<div style="color:#7d7d94;font-size:13px;padding:8px 0">None — you never rate a film a full star ${up?'above':'below'} the crowd.</div>`}
+    </div>`;
+  const lean=h.signed>=0.05?'more generous than':h.signed<=-0.05?'harsher than':'in step with';
+  el.innerHTML=head+`
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:26px;background:linear-gradient(150deg,#141420,#0e0e18);border:1px solid #1a1a2e;border-radius:12px;padding:18px 22px">
+      ${histTile(h.n.toLocaleString(),'Films compared','rated, with a crowd score')}
+      ${histTile((h.signed>=0?'+':'−')+Math.abs(h.signed).toFixed(2),'Stars vs the crowd',`on average you're ${lean} TMDB`)}
+      ${histTile(Math.round(h.agree*100)+'%','Agree','within half a star')}
+      ${histTile(h.loved.length+h.panned.length,'Hot takes','a full star or more apart')}
+    </div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap">
+      ${col('You loved, the crowd didn\'t','rated well above the TMDB average',h.loved,true)}
+      ${col('The crowd loved, you didn\'t','rated well below the TMDB average',h.panned,false)}
+    </div>
+    <div style="margin-top:22px"><button class="btn-ghost btn-sm" onclick="downloadHotTakesCard()" title="Download a shareable image of your hottest takes">↓ Share card</button></div>`;
+}
+
+function buildHotTakesCardSVG(h,posters){
+  posters=posters||{};
+  const W=1080,H=1350, un=STATE.userName, filt=filterLabel(), withP=Object.keys(posters).length>0;
+  const tx=withP?220:120;
+  const section=(title,list,y0,col)=>`<text x="110" y="${y0}" fill="${col}" font-size="20" font-family="Georgia,serif" letter-spacing="4">${esc(title)}</text>`+
+    list.slice(0,HOT_CARD_ROWS).map((r,i)=>{
+      const y=y0+62+i*96, img=posters[r.f.name+'||'+r.f.year];
+      return `${img?`<image href="${img}" x="110" y="${y-38}" width="56" height="84" preserveAspectRatio="xMidYMid slice"/>`:withP?`<rect x="110.5" y="${y-37.5}" width="55" height="83" rx="4" fill="#0f0f1c" stroke="#1e1e30"/>`:''}
+        <text x="${tx}" y="${y}" fill="#f0e8d8" font-size="29" font-family="Georgia,serif" font-weight="bold">${esc(svgTrunc(r.f.name,32))}</text>
+        <text x="${tx}" y="${y+30}" fill="#9595aa" font-size="18" font-family="Georgia,serif">${esc(svgTrunc([Number.isFinite(r.f.year)?r.f.year:'',r.d.director||''].filter(Boolean).join(' · '),44))}</text>
+        <text x="${W-110}" y="${y}" text-anchor="end" fill="#c8a840" font-size="24" font-family="Georgia,serif">${esc(svgStarsText(r.f.rating))}</text>
+        <text x="${W-110}" y="${y+30}" text-anchor="end" fill="${col}" font-size="18" font-family="Georgia,serif">${r.diff>0?'+':'−'}${Math.abs(r.diff).toFixed(1)} vs crowd ★${r.crowd.toFixed(1)}</text>`;
+    }).join('');
+  return shareCardFrame(W,H,`
+    <text x="${W/2}" y="120" text-anchor="middle" fill="#8c8ca2" font-size="22" font-family="Georgia,serif" letter-spacing="8">${esc((un?un+"'s ":'MY ').toUpperCase())}${filt?esc(filt.toUpperCase())+' ':''}HOT TAKES</text>
+    <text x="${W/2}" y="196" text-anchor="middle" fill="#f0e8d8" font-size="60" font-family="Georgia,serif" font-weight="bold">Me vs the Crowd</text>
+    ${section("I LOVED, THE CROWD DIDN'T",h.loved,280,'#c8a840')}
+    ${section("THE CROWD LOVED, I DIDN'T",h.panned,780,'#9fb0d0')}`);
+}
+async function downloadHotTakesCard(){
+  const h=hotTakes();
+  const rows=[...h.loved.slice(0,HOT_CARD_ROWS),...h.panned.slice(0,HOT_CARD_ROWS)];
+  if(!rows.length){ showToast('No hot takes to share yet'); return; }
+  showToast('Preparing the image…');
+  const posters={};
+  await Promise.all(rows.map(async r=>{ const u=await posterDataURL(filmPosterOf(r.f)); if(u) posters[r.f.name+'||'+r.f.year]=u; }));
+  svgToPNG(buildHotTakesCardSVG(h,posters),1080,1350,`${STATE.userName||'my'}-hot-takes`,1);
+}
+
+// ─── How your Rushmore changed ────────────────────────────────────────────────
+// The top four as it stood at the end of each diary year, scored exactly as the
+// Rushmore tabs are (current weights and minimum) over the films you had logged
+// by then. A film's date is its first diary entry or, failing that, the day you
+// rated it; a film with neither counts from the start, as your backlog. Ratings
+// are today's — the export keeps no history of them. The 100% bonus is left out:
+// filmographies have no past to replay.
+function rushmoreTimeline(cat){
+  const films=STATE._films, fd=STATE._filmData, diary=STATE._diary||[];
+  if(!films||!fd||!diary.length) return null;
+  const firstDiary={}, rows={};
+  for(const v of diary){
+    const k=v.name+'||'+v.year;
+    if(!firstDiary[k]||v.date<firstDiary[k]) firstDiary[k]=v.date;
+    (rows[k]||(rows[k]=[])).push(v);
+  }
+  const ro=STATE._ratedOn||{};
+  const dated=films.map(f=>{
+    const k=f.name+'||'+f.year, a=firstDiary[k], b=ro[k];
+    return {f,k,date:a&&b?(a<b?a:b):(a||b||'')};
+  });
+  const years=[...new Set(diary.map(v=>+v.date.slice(0,4)))].sort((a,b)=>a-b);
+  const pick={directors:'byDir',writers:'byWriter',actors:'byActor'}[cat]||'byDir';
+  const out=[];
+  let prev=null;
+  for(const y of years){
+    const end=y+'-12-31';
+    const snap=[];
+    for(const x of dated){
+      if(x.date&&x.date>end) continue;
+      const vs=rows[x.k];
+      if(!vs){ snap.push(x.f); continue; }
+      // Rewatches as they stood then, counted the way consolidateFilms counts them
+      const upto=vs.filter(v=>v.date<=end);
+      snap.push(Object.assign({},x.f,{rewatchCount:Math.max(upto.filter(v=>v.rewatch).length,upto.length-1,0)}));
+    }
+    const maps=buildPersonMaps(snap,fd);
+    const top=computeScores(maps[pick],maps.globalMean,MIN_FILMS).slice(0,4).map(d=>d.name);
+    out.push({year:y, films:snap.length, top,
+      moves:top.map((n,i)=>{ if(!prev) return null; const j=prev.indexOf(n); return j<0?'new':j-i; }),
+      out:prev?prev.filter(n=>!top.includes(n)):[]});
+    prev=top;
+  }
+  return out;
+}
+function rushmoreTimelineHTML(){
+  const cat=STATE._rtCat||'directors';
+  const h=getHistory();
+  if(!h) return '';
+  h._rt=h._rt||{};   // memoized on the history object, which a re-score throws away
+  const tl=h._rt[cat]||(h._rt[cat]=rushmoreTimeline(cat));
+  if(!tl||tl.length<2) return '';
+  const thisYear=new Date().getFullYear();
+  const tab=k=>`<button type="button" onclick="setRtCat('${k}')" aria-pressed="${k===cat}" style="background:${k===cat?'#1c1c30':'transparent'};border:1px solid ${k===cat?'#3a3a52':'#1e1e2e'};color:${k===cat?'#f0e8d8':'#8c8ca2'};border-radius:6px;padding:3px 10px;font-family:inherit;font-size:11px;cursor:pointer">${CAT_ICONS[k]} ${CAT_LABELS[k]}</button>`;
+  const mark=m=>m==null||m===0?'':m==='new'
+    ? `<span style="color:#6fbf8f;font-size:9px;letter-spacing:1px;margin-left:4px" title="new to your top four">NEW</span>`
+    : `<span style="color:${m>0?'#c8a840':'#9a7f7f'};font-size:10px;margin-left:4px" title="${m>0?'up':'down'} ${Math.abs(m)} since the year before">${m>0?'▲':'▼'}${Math.abs(m)}</span>`;
+  const rowsHTML=[...tl].reverse().map(r=>`<div style="display:flex;gap:10px;align-items:baseline;padding:8px 0;border-bottom:1px solid #14141f;flex-wrap:wrap">
+      <span class="mono" style="color:#c8c0ae;font-size:12px;width:62px;flex-shrink:0">${r.year}${r.year===thisYear?'<span style="color:#7d7d94;font-size:9px;display:block">so far</span>':''}</span>
+      <div style="flex:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 12px;min-width:0">
+        ${r.top.length?r.top.map((n,i)=>`<span style="font-size:12px;min-width:0"><span style="color:${RANK_COLORS[i]};font-size:10px;font-weight:700;margin-right:5px">#${i+1}</span>${personLinkHTML(n,`<span class="person-name" style="color:#e0d8c8">${esc(n)}</span>`)}${mark(r.moves[i])}</span>`).join('')
+          :`<span style="color:#7d7d94;font-size:12px">Nobody with ${MIN_FILMS}+ rated films yet</span>`}
+      </div>
+      ${r.out.length?`<span style="color:#7d7d94;font-size:10px;width:100%;padding-left:72px">dropped off: ${r.out.map(esc).join(', ')}</span>`:''}
+    </div>`).join('');
+  return `<div id="rt-section" style="margin-bottom:34px">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      ${histSubhead('How your Rushmore changed','your top four at the end of each year')}
+      <span style="flex:1"></span><span style="display:inline-flex;gap:4px">${CATS.map(tab).join('')}</span>
+    </div>
+    <div style="color:#7d7d94;font-size:11px;line-height:1.6;margin-bottom:8px;max-width:640px">Scored like the ${CAT_LABELS[cat]} tab, over the films you'd logged by 31 December. Ratings are today's, and films logged without a date count from the start.</div>
+    ${rowsHTML}
+  </div>`;
+}
+function setRtCat(cat){
+  STATE._rtCat=CATS.includes(cat)?cat:'directors';
+  const el=document.getElementById('rt-section');
+  if(el) el.outerHTML=rushmoreTimelineHTML(); else renderHistoryPanel();
 }
 
 // ─── History rendering ────────────────────────────────────────────────────────
@@ -4153,10 +4597,9 @@ function histTrendRows(rows,fmtKey){
 function histFilmCard(v,i){
   const rc=RANK_COLORS[i]||'#9999bb';
   const g=(v.genres||[]).slice(0,2).join(' · ');
-  // A director is only a way in when the app scored them — below the min-films
-  // slider there is no filmography panel to open. The chevron is the tell, so a
-  // card that does nothing never looks like a card that does.
-  const open=v.director&&dirByName(v.director);
+  // The director opens your history with them (which links on to their
+  // filmography when they're scored). The chevron is the tell.
+  const open=!!v.director;
   const inner=`<div class="hist-card-in" style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:12px;padding:16px;height:100%;transition:border-color .15s,background .15s">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:7px">
       <span style="color:${rc};font-size:10px;font-weight:700;letter-spacing:1px">#${i+1}</span>
@@ -4171,7 +4614,7 @@ function histFilmCard(v,i){
     <div style="color:#7d7d94;font-size:10px;margin-top:10px;border-top:1px solid #14141f;padding-top:7px">Watched ${histDate(v.date)}</div>
   </div>`;
   return `<div style="flex:1;min-width:168px;display:flex">${open
-    ? `<button type="button" class="hist-card" title="${esc(v.director)}'s filmography" aria-label="${esc('Open '+v.director+"'s filmography")}" onclick="openFilmogModal(${esc(JSON.stringify(v.director))})">${inner}</button>`
+    ? `<button type="button" class="hist-card" title="${esc('Your films by '+v.director)}" aria-label="${esc('Your films by '+v.director)}" onclick="openPersonModal(${esc(JSON.stringify(v.director))})">${inner}</button>`
     : inner}</div>`;
 }
 
@@ -4368,7 +4811,7 @@ function histYearSection(y,idx,earliest){
         ? 'first year of your diary, so everyone here counts as new'
         : 'first time they appear in your diary')}
       ${y.discovered.map(d=>`<div style="display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid #14141f;flex-wrap:wrap">
-        <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:120px">${esc(d.name)}</span>
+        <span style="color:#c8c0ae;font-size:13px;flex:1;min-width:120px">${personLinkHTML(d.name,`<span class="person-name">${esc(d.name)}</span>`)}</span>
         <span style="color:#7d7d94;font-size:11px">started with ${esc(d.first)}</span>
         <span class="mono" style="color:#c8a840;font-size:11px;white-space:nowrap">${d.count} film${d.count!==1?'s':''}${d.avg!=null?' · ★'+d.avg.toFixed(1):''}</span>
       </div>`).join('')}</div>`:''}
@@ -4452,6 +4895,8 @@ function renderHistoryPanel(){
       </div>
       ${rtNote?`<div style="color:#7d7d94;font-size:11px;margin-top:16px;border-top:1px solid #16162a;padding-top:12px">Hours are estimated${rtNote}.</div>`:''}
     </div>
+
+    ${rushmoreTimelineHTML()}
 
     ${ageYears.length?`<div style="display:flex;gap:30px;flex-wrap:wrap;margin-bottom:34px">
       <div style="flex:1;min-width:280px">
@@ -5105,24 +5550,29 @@ function onSettingSlider(key, val){
 // Shared so both dialogs move focus in and hand it back, and Escape works. Without
 // this, opening a modal left focus on the page behind it — a screen reader was never
 // told anything had happened, and there was no way out except a mouse click.
-let _lastFocus=null;
+// A stack, because a dialog can open over another (a name on the Surprise-me
+// card opens your history with that person) and each close hands focus back to
+// whatever opened that one.
+const _focusStack=[];
 function openModalEl(id){
-  _lastFocus=document.activeElement;
+  _focusStack.push(document.activeElement);
   const el=document.getElementById(id);
   el.classList.add('open');
   const close=el.querySelector('.modal-close');
   if(close) close.focus();
 }
 function closeModalEl(id){
-  document.getElementById(id).classList.remove('open');
-  if(_lastFocus&&typeof _lastFocus.focus==='function') _lastFocus.focus();
-  _lastFocus=null;
+  const el=document.getElementById(id);
+  if(!el.classList.contains('open')) return;
+  el.classList.remove('open');
+  const back=_focusStack.pop();
+  if(back&&typeof back.focus==='function') back.focus();
 }
 // Tab stays inside an open dialog: without this it walked out into the page
 // behind the overlay, which a keyboard user cannot see.
 const FOCUSABLE='button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"]),summary';
 function trapModalTab(e){
-  const open=document.querySelector('.modal-bg.open');
+  const all=document.querySelectorAll('.modal-bg.open'), open=all[all.length-1];   // the topmost — later in the page paints on top
   if(!open) return;
   const items=[...open.querySelectorAll(FOCUSABLE)].filter(x=>x.offsetParent!==null);
   if(!items.length) return;
@@ -5133,6 +5583,8 @@ function trapModalTab(e){
 document.addEventListener('keydown',e=>{
   if(e.key==='Tab'){ trapModalTab(e); return; }
   if(e.key!=='Escape') return;
+  const pm=document.getElementById('person-modal');
+  if(pm&&pm.classList.contains('open')){ closeModalEl('person-modal'); return; }
   const sv=document.getElementById('svc-modal');
   if(sv&&sv.classList.contains('open')){ closeModalEl('svc-modal'); return; }
   const pk=document.getElementById('pick-modal');
@@ -5503,6 +5955,13 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
   <div class="modal-box" role="dialog" aria-modal="true" aria-label="Surprise pick">
     <button class="modal-close" onclick="closeModalEl('pick-modal')" aria-label="Close">✕</button>
     <div id="pick-modal-body"></div>
+  </div>
+</div>
+
+<div id="person-modal" class="modal-bg" onclick="if(event.target===this)closeModalEl('person-modal')">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-label="Your films with this person">
+    <button class="modal-close" onclick="closeModalEl('person-modal')" aria-label="Close">✕</button>
+    <div id="person-modal-body"></div>
   </div>
 </div>
 
