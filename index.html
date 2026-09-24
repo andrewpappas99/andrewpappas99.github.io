@@ -2702,10 +2702,65 @@ function saveProvCache(){
   },800);
 }
 
-// A title-keyed lookup that has since learned its id is findable both ways
+// ─── Baked streaming data ─────────────────────────────────────────────────────
+// providers-<REGION>.js, rebuilt weekly by build-providers.js in the site repo's
+// GitHub Action, answers for every film in the database with no key at all. Only
+// the visitor's region is loaded. A region without a file (404) falls back to
+// live lookups for anyone with a key; the format is described in build-providers.js.
+const _baked={};   // region -> 'loading' | false (no file) | {built, names, map:Map(id -> offers)}
+function bakedProviders(){
+  const region=watchRegion(), b=_baked[region];
+  if(b===undefined) loadBakedProviders(region);
+  return b&&typeof b==='object'?b:null;
+}
+function loadBakedProviders(region){
+  if(typeof document==='undefined'||!document.head||!/^[A-Z]{2}$/.test(region)) return;
+  _baked[region]='loading';
+  const s=document.createElement('script');
+  s.src='providers-'+region+'.js';
+  s.onload=()=>{
+    const p=window.CMR_PROVIDERS;
+    try{ delete window.CMR_PROVIDERS; }catch(e){}
+    _baked[region]=p&&p.region===region?decodeBakedProviders(p):false;
+    if(_baked[region]&&region===watchRegion()) renderRecsPanel();
+  };
+  s.onerror=()=>{ _baked[region]=false; };
+  document.head.appendChild(s);
+}
+function decodeBakedProviders(p){
+  const map=new Map();   // tmdb id -> "subs/free/rentBuy", '' when on nothing
+  let id=0;
+  for(const e of String(p.data||'').split(' ')){
+    if(!e) continue;
+    const i=e.indexOf(':');
+    id+=parseInt(i<0?e:e.slice(0,i),36);
+    if(!(id>0)) break;   // a corrupt file: keep what decoded cleanly
+    map.set(id,i<0?'':e.slice(i+1));
+  }
+  const names=p.names&&typeof p.names==='object'?p.names:{};
+  return {built:String(p.built||''),at:Date.parse(p.built)||Date.now(),names,map,recs:new Map()};
+}
+// Offers are unpacked on first use; most of the 58k films are never shown
+function bakedRecord(tmdbId){
+  const b=tmdbId&&bakedProviders();
+  if(!b||!b.map.has(tmdbId)) return null;
+  let rec=b.recs.get(tmdbId);
+  if(!rec){
+    const [s,f,rb]=b.map.get(tmdbId).split('/');
+    const list=x=>x?x.split(',').map(n=>parseInt(n,36)).filter(n=>n>0&&b.names[n]).map(n=>[n,String(b.names[n]).slice(0,40)]):[];
+    rec={at:b.at,id:tmdbId,s:list(s),f:list(f),rb:list(rb),baked:b.built};
+    b.recs.set(tmdbId,rec);
+  }
+  return rec;
+}
+// Streaming info is on offer: a key for live lookups, or a baked file for this region
+function streamingOn(){ return !!getKey('tmdb')||!!bakedProviders(); }
+
+// A title-keyed lookup that has since learned its id is findable both ways.
+// A live answer cached in this browser wins; the weekly file fills in the rest.
 function providerFor(title,year,tmdbId){
   const c=provCache();
-  return c[provKey(title,year,tmdbId)]||(tmdbId?c[provKey(title,year,null)]:null)||null;
+  return c[provKey(title,year,tmdbId)]||(tmdbId?c[provKey(title,year,null)]:null)||bakedRecord(tmdbId)||null;
 }
 
 function loadServices(){
@@ -2828,11 +2883,11 @@ function saveStreamState(){
     if(Object.keys(nw).length) localStorage.setItem(STREAM_NEW_KEY,JSON.stringify(nw)); else localStorage.removeItem(STREAM_NEW_KEY);
   }catch(e){ /* quota — the in-memory copy still serves this session */ }
 }
-function noteStreamingChange(k,title,year,rec){
+function noteStreamingChange(k,title,year,rec,noSave){
   if(!rec||rec.error||rec.none) return;
   const offers=streamOffers(rec), ids=offers.map(o=>String(o[0]));
   const seen=streamSeen(), before=seen[k], nw=streamNewMap();
-  seen[k]={ids,at:Date.now()};
+  seen[k]=rec.baked?{ids,at:Date.now(),b:rec.baked}:{ids,at:Date.now()};
   if(before&&Array.isArray(before.ids)){
     const fresh=offers.filter(o=>!before.ids.includes(String(o[0])));
     if(fresh.length){
@@ -2843,7 +2898,22 @@ function noteStreamingChange(k,title,year,rec){
   }
   // A service it has since left is no longer news
   if(nw[k]){ nw[k].o=nw[k].o.filter(o=>ids.includes(String(o[0]))); if(!nw[k].o.length) delete nw[k]; }
-  saveStreamState();
+  if(!noSave) saveStreamState();
+}
+// The weekly file answers for the whole watchlist at once, so each new file is
+// compared against what every watchlist film showed before, not only the films
+// looked at. A film already compared against this week's file is skipped.
+function noteBakedChanges(ranked){
+  if(!bakedProviders()) return;
+  const seen=streamSeen(); let changed=false;
+  for(const x of ranked){
+    const rec=providerFor(x.f.name,x.f.year,x.d.tmdbId);
+    if(!rec||!rec.baked) continue;
+    const k=provKey(x.f.name,x.f.year,x.d.tmdbId);
+    if(seen[k]&&seen[k].b===rec.baked) continue;
+    noteStreamingChange(k,x.f.name,x.f.year,rec,true); changed=true;
+  }
+  if(changed) saveStreamState();
 }
 // What arrived on your services (any service, with none picked) for this film
 function newOffersFor(title,year,tmdbId){
@@ -2861,7 +2931,8 @@ function dismissNewStreaming(title,year,tmdbId){
 }
 // The watchlist's films with news, newest first
 function newlyStreaming(ranked){
-  if(!getKey('tmdb')) return [];
+  if(!streamingOn()) return [];
+  noteBakedChanges(ranked);
   const out=[];
   for(const x of ranked){ const n=newOffersFor(x.f.name,x.f.year,x.d.tmdbId); if(n) out.push(Object.assign({x},n)); }
   return out.sort((a,b)=>b.at-a.at);
@@ -2878,7 +2949,7 @@ function newlyStreamingHTML(r){
       <span style="color:#7d7d94;font-size:11px">· noticed ${fmtSince((Date.now()-n.at)/86400000)}</span>
       <button type="button" onclick="dismissNewStreaming(${esc(JSON.stringify(n.x.f.name))},${Number.isFinite(n.x.f.year)?n.x.f.year:'null'},${n.x.d.tmdbId||'null'})" aria-label="${esc('Dismiss '+n.x.f.name)}" style="background:none;border:none;color:#7d7d94;cursor:pointer;font-family:inherit;font-size:11px;text-decoration:underline;margin-left:auto">dismiss</button>
     </div>`).join('')}
-    <div style="color:#7d7d94;font-size:11px;margin-top:6px">Spotted when a film's streaming info refreshes, every few days for the films you view. Kept for ${STREAM_NEW_DAYS} days.</div>
+    <div style="color:#7d7d94;font-size:11px;margin-top:6px">${bakedProviders()?'Checked weekly across your whole watchlist':"Spotted when a film's streaming info refreshes, every few days for the films you view"}. Kept for ${STREAM_NEW_DAYS} days.</div>
   </div>`;
 }
 
@@ -2908,7 +2979,8 @@ function providerLineHTML(p,k){
 // A placeholder that fills in when its lookup lands. Keyed so every copy of the
 // same film on the page (the list and a Surprise-me modal) updates together.
 function providerSlotHTML(title,year,tmdbId){
-  if(!getKey('tmdb')) return '';
+  // Without a key, only films the weekly file covers can be answered
+  if(!getKey('tmdb')&&!(bakedProviders()&&providerFor(title,year,tmdbId))) return '';
   const k=provKey(title,year,tmdbId);
   return `<div class="prov-slot" data-k="${esc(k)}" data-t="${esc(title)}" data-y="${Number.isFinite(year)?year:''}" data-id="${tmdbId||''}" style="font-size:11px;line-height:1.5;margin-bottom:9px">${providerLineHTML(providerFor(title,year,tmdbId),k)}</div>`;
 }
@@ -2944,7 +3016,7 @@ function streamStatusText(){
 
 // "on Netflix", "on Netflix or Max", "on 4 of your services" — only while the filter is on
 function servicesPhrase(){
-  if(!STATE.wlStreamOnly||!getKey('tmdb')) return '';
+  if(!STATE.wlStreamOnly||!streamingOn()) return '';
   const names=Object.values(SERVICES);
   if(!names.length) return 'streaming now';
   return 'on '+(names.length<=2?names.join(' or '):names.length+' of your services');
@@ -2962,17 +3034,20 @@ function openServicesModal(){ renderServicesModal(); openModalEl('svc-modal'); }
 function renderServicesModal(){
   const body=document.getElementById('svc-modal-body');
   if(!body) return;
-  const region=watchRegion(), counts=new Map();
-  const c=provCache();
-  for(const k in c){
-    if(!k.startsWith(region+'|')) continue;
-    for(const o of streamOffers(c[k])){ const e=counts.get(o[0])||{name:o[1],n:0}; e.n++; counts.set(o[0],e); }
+  const region=watchRegion(), counts=new Map(), b=bakedProviders();
+  const tally=o=>{ const e=counts.get(o[0])||{name:o[1],n:0}; e.n++; counts.set(o[0],e); };
+  if(b){
+    // The weekly file covers every film, so count across all of them
+    for(const [id,v] of b.map){ if(v&&v.split('/').slice(0,2).join('')) streamOffers(bakedRecord(id)).forEach(tally); }
+  }else{
+    const c=provCache();
+    for(const k in c) if(k.startsWith(region+'|')) streamOffers(c[k]).forEach(tally);
   }
   for(const id in SERVICES) if(!counts.has(+id)) counts.set(+id,{name:SERVICES[id],n:0});
   const list=[...counts.entries()].sort((a,b)=>b[1].n-a[1].n||a[1].name.localeCompare(b[1].name));
   body.innerHTML=`<div class="eyebrow" style="margin-bottom:10px">📺 My services</div>
     <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700;margin-bottom:8px">What do you subscribe to?</h2>
-    <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-bottom:12px">Your services are highlighted on every card, and <b style="color:#c8c0b0">On my services</b> narrows the watchlist to them. With none picked, that filter means streaming anywhere. Showing services in <b style="color:#c8c0b0">${esc(region)}</b>, as your films load.</p>
+    <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-bottom:12px">Your services are highlighted on every card, and <b style="color:#c8c0b0">On my services</b> narrows the watchlist to them. With none picked, that filter means streaming anywhere. Showing services in <b style="color:#c8c0b0">${esc(region)}</b>${b?', by how many films each carries':', as your films load'}.</p>
     <div style="margin-bottom:16px">${regionPickerHTML()}</div>
     ${list.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">${list.map(([id,e])=>`
       <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:#111120;border:1px solid ${SERVICES[id]?'#6fbf8f55':'#1e1e2e'};border-radius:8px;cursor:pointer;color:#c8c0b0;font-size:13px">
@@ -3579,13 +3654,15 @@ function rankList(wl,stream,rewatch){
     if((ag&&!(d.genres||[]).includes(ag))||!inDecade(f.year)){ out.hiddenByGenre++; continue; }
     // An unknown runtime can't promise to fit the evening, so it sits out the filter
     if(STATE.wlMaxRuntime&&!(d.runtime>0&&d.runtime<=STATE.wlMaxRuntime)){ out.hiddenByRuntime++; continue; }
-    if(stream&&STATE.wlStreamOnly&&getKey('tmdb')){
+    if(stream&&STATE.wlStreamOnly&&streamingOn()){
       const p=providerFor(f.name,f.year,d.tmdbId);
-      if(!p){ out.awaiting.push({title:f.name,year:f.year,tmdbId:d.tmdbId||null}); continue; }
+      // Without a key a film the weekly file doesn't cover can't be asked about
+      if(!p&&!getKey('tmdb')) out.streamUnknown++;
+      else if(!p){ out.awaiting.push({title:f.name,year:f.year,tmdbId:d.tmdbId||null}); continue; }
       // A lookup that failed says nothing about where the film streams, so it
       // stays in the list, where its card offers a retry, rather than being
       // counted as "not on your services".
-      if(p.error) out.streamUnknown++;
+      else if(p.error) out.streamUnknown++;
       else if(!streamsOnMine(p)){ out.hiddenByStream++; continue; }
     }
     const sc=scoreWatchlistFilm(d,taste);
@@ -3821,12 +3898,12 @@ function watchlistBodyHTML(){
       ${WL_RUNTIMES.map(m=>{ const on=STATE.wlMaxRuntime===m;
         return `<button onclick="setWlRuntime(${m})" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${m?'Under '+fmtDuration(m):'Any'}</button>`; }).join('')}
       <span style="width:1px;height:18px;background:#1e1e2e;margin:0 4px"></span>
-      ${getKey('tmdb')
+      ${streamingOn()
         ? `<label style="display:flex;align-items:center;gap:6px;color:#a9a9bc;font-size:12px;cursor:pointer" title="Only films streaming on your services (or anywhere, with none picked)">
             <input type="checkbox" ${STATE.wlStreamOnly?'checked':''} onchange="setWlStreamOnly(this.checked)" style="accent-color:#6fbf8f;cursor:pointer"/>On my services</label>
           <button onclick="openServicesModal()" style="background:none;border:none;color:#8c8ca2;font-family:inherit;font-size:12px;cursor:pointer;text-decoration:underline">📺 ${Object.keys(SERVICES).length?Object.keys(SERVICES).length+' picked':'Pick services'} · ${esc(REGION_NAMES[justWatchLocale()]||justWatchLocale().toUpperCase())}</button>
           <span id="wl-stream-status" style="color:#7d7d94;font-size:11px">${streamStatusText()}</span>`
-        : `<span style="color:#7d7d94;font-size:11px">Add a TMDB key in ⚙ Setup to see where each film is streaming</span>`}
+        : `<span style="color:#7d7d94;font-size:11px">No streaming info for ${esc(REGION_NAMES[justWatchLocale()]||justWatchLocale().toUpperCase())} without a TMDB key (⚙ Setup)</span> ${regionPickerHTML()}`}
       <span style="flex:1"></span>
       <button class="btn-gold btn-sm" onclick="surpriseMe()" ${r.ranked.length?'':'disabled style="opacity:.5"'}>🎲 Surprise me</button>
       <button class="btn-ghost btn-sm" onclick="downloadWatchlistCard()" ${r.ranked.length?'':'disabled style="opacity:.5"'} title="Download an image of your top picks">↓ Share image</button>
@@ -5858,6 +5935,7 @@ function initApp(){
   paintWeightsBadge();
   registerDBCache();
   loadDBTail();
+  bakedProviders();   // this region's streaming file, ahead of the first watchlist render
   // Decoding a compressed link is async, so decide on the hash synchronously and
   // only fall back to the upload page if the decode actually fails.
   if(!hasShareHash()){ showPage('page-upload'); renderResumeCard(); return; }
