@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https://image.tmdb.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://api.themoviedb.org https://image.tmdb.org; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https://image.tmdb.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://api.themoviedb.org https://image.tmdb.org https://lb-rss.andrewpappas99.workers.dev; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Cinematic Mount Rushmore</title>
 <meta name="theme-color" content="#08080f"/>
 <link rel="manifest" href="manifest.json"/>
@@ -319,6 +319,8 @@ body.no-posters .poster{display:none}
 
   <!-- Background TMDB lookups, once the results are already up -->
   <div id="bg-status" role="status" aria-live="polite" style="display:none"></div>
+  <!-- Letterboxd diary top-up: checking, what it added, or why it couldn't -->
+  <div id="lb-sync" role="status" aria-live="polite" style="display:none"></div>
 
   <!-- Data quality banners -->
   <div id="data-quality-banner"></div>
@@ -610,7 +612,8 @@ const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   _diary:[], _history:null, _ratedOn:{},
   recSource:'directors', _watchlist:null, _wlAbort:null, _wlRun:0, _wlShowAll:false,
   wlMaxRuntime:0, _lastPick:null, recPeople:true, wlStreamOnly:false,
-  _ownedShowAll:false, _ownedPending:0 };
+  _ownedShowAll:false, _ownedPending:0,
+  lbUser:'', lbSyncedAt:0, _lbSync:null };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -1224,6 +1227,7 @@ function applySavedData(d){
   if(!d||typeof d!=='object') throw new Error('Invalid cache file.');
   if(!d.version||!d.directors) throw new Error('Invalid cache file.');
   STATE.userName=d.userName||'';
+  STATE.lbUser=cleanLbUser(d.lbUser); STATE.lbSyncedAt=Number.isFinite(d.lbSyncedAt)?d.lbSyncedAt:0; STATE._lbSync=null;
   STATE.genres=d.genres||[];
   // Pre-v7 files carry no diary; the history tab simply stays hidden.
   STATE._diary=sanitizeDiary(d.diary); STATE._ratedOn=sanitizeRatedOn(d.ratedOn); STATE._history=null;
@@ -1324,6 +1328,13 @@ function parseProfileName(text){
   const given=gi('given name')>=0?(rows[1][gi('given name')]||'').trim():'';
   return (given||(rows[1][gi('username')]||'').trim()).slice(0,40);
 }
+// The username, too: it is what the Letterboxd top-up reads the diary feed by.
+function parseProfileUsername(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(rows.length<2) return '';
+  const i=rows[0].map(h=>h.toLowerCase().trim()).indexOf('username');
+  return i<0?'':cleanLbUser(rows[1][i]);
+}
 function isProfileFile(f){ return /^profile\.csv$/i.test(String(f&&f.name||'')); }
 // Files every Letterboxd export carries that are not film logs. Skipped quietly —
 // naming them in a "Skipped …" toast on every whole-zip upload read as an error.
@@ -1352,6 +1363,7 @@ async function handleFileInput(files){
       try{
         applySavedData(JSON.parse(t));
         renderResults(); showPage('page-results');
+        syncLetterboxd();
         if(wlFiles.length) importWatchlistFiles(wlFiles);   // a fresh CSV beats the saved copy
       }catch(e){showError('Could not load cache: '+e.message);}
     }); return;
@@ -1361,7 +1373,9 @@ async function handleFileInput(files){
   // The name comes from profile.csv when it is in the upload and can be edited on
   // the results page — no separate screen for it.
   const prof=arr.find(isProfileFile);
-  STATE.userName=prof?parseProfileName(await prof.text()):(STATE.userName||'');
+  const profText=prof?await prof.text():'';
+  STATE.userName=prof?parseProfileName(profText):(STATE.userName||'');
+  if(prof) STATE.lbUser=parseProfileUsername(profText)||STATE.lbUser;
   startAnalysis();
 }
 
@@ -1443,6 +1457,7 @@ async function startAnalysis(){
       for(const k in rd) if(!ratedOn[k]||rd[k]<ratedOn[k]) ratedOn[k]=rd[k];
     }
     STATE._diary=dedupeDiary(diary); STATE._ratedOn=ratedOn; STATE._history=null;
+    STATE._lbSync=null; _lbSyncRun++;   // a fresh export supersedes any feed check in flight
     if(STATE.runId!==thisRunId) return;
     if(!allRaw.length) throw lastError||new Error('No films found.');
     const films=consolidateFilms(dedupeViewings(allRaw));
@@ -1585,6 +1600,7 @@ function resetApp(){
   STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._byDirAll=null;STATE._filmData=null;STATE._films=null;
   STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._missList=[];STATE._activeGenre=null;STATE._activeDecade=null;STATE._conformity=null;
   STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';
+  STATE.lbUser='';STATE.lbSyncedAt=0;STATE._lbSync=null;_lbSyncRun++;renderLbSync();
   clearWatchlist();resetProviders();STATE.recSource='directors';invalidateCoverage();resetSettings();
   _catUI={}; _dirtyPanels.clear();
   document.getElementById('file-input').value='';
@@ -1682,6 +1698,7 @@ async function resumeSession(){
   try{
     applySavedData(JSON.parse(rec.payload));
     renderResults(); showPage('page-results');
+    syncLetterboxd();   // anything logged since this was saved
   }catch(e){
     console.warn('Saved session unreadable',e);
     showToast('That saved session could not be opened');
@@ -1693,6 +1710,180 @@ async function resumeSession(){
   }
 }
 
+// ─── Letterboxd top-up ────────────────────────────────────────────────────────
+// Upload the export once; after that, films logged since are read from the
+// member's public diary feed. Letterboxd sends no CORS header, so the feed goes
+// through a small Worker (worker/letterboxd-rss.js) that returns only the diary
+// fields. The feed holds the 50 most recent diary entries and does not page, so
+// when none of those 50 is already known there may be more behind them — that
+// asks for a fresh export rather than leaving a hole in the history.
+// The feed only carries diary entries: films marked watched or rated without a
+// log, re-ratings of old films and deletions still need an export.
+// Empty turns the feature off. connect-src in the CSP must list this origin.
+let LB_PROXY='https://lb-rss.andrewpappas99.workers.dev';
+const LB_FEED_MAX=50;
+const LB_USER_RE=/^[A-Za-z0-9_]{1,40}$/;
+const LB_NOLINK_KEY='cmr_lb_nolink';
+const LB_RECHECK_MS=30*60*1000;   // a tab left open re-checks when it comes back into view
+
+// Accepts "name", "@name" or a pasted profile URL.
+function cleanLbUser(v){
+  let s=String(v==null?'':v).trim().replace(/^@/,'');
+  const m=s.match(/letterboxd\.com\/([^\/?#\s]+)/i); if(m) s=m[1];
+  return LB_USER_RE.test(s)?s:'';
+}
+
+// normTitle reads an apostrophe as a word break, so "Ocean's" and "Oceans" differ;
+// here they should not.
+const feedTitle=n=>normTitle(String(n).replace(/['’‘`]/g,''));
+
+// Which feed entries are new to this diary, and whether the feed reaches back far
+// enough to trust. Matched on date, title and year, with the title normalised so
+// a punctuation change on Letterboxd's side doesn't read as a second viewing.
+function planFeedMerge(entries,diary){
+  const key=(date,name,year)=>date+'|'+feedTitle(name)+'|'+year;
+  const known=new Set((diary||[]).map(r=>key(r.date,r.name,r.year)));
+  const valid=(Array.isArray(entries)?entries:[]).filter(e=>e&&typeof e.title==='string'&&e.title.trim()
+    &&DIARY_DATE_RE.test(String(e.date||''))&&Number.isFinite(e.year));
+  const fresh=[], seen=new Set();
+  let overlap=false;
+  for(const e of valid){
+    const k=key(e.date,e.title,e.year);
+    if(known.has(k)){ overlap=true; continue; }
+    if(seen.has(k)) continue;
+    seen.add(k);
+    const r=Number(e.rating);
+    fresh.push({title:e.title.trim().slice(0,200),year:e.year,date:e.date,
+      rating:r>0&&r<=5?r:0,rewatch:!!e.rewatch});
+  }
+  // A full feed sharing nothing with what's stored may have more behind it
+  const gap=!overlap&&valid.length>=LB_FEED_MAX;
+  fresh.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  return {added:gap?[]:fresh,gap};
+}
+
+// Folds new diary entries into the library the way consolidateFilms would have
+// had they been in the export: the newest logged rating is the current one, and
+// rewatches are ticks or dated sittings beyond the first. Returns the films that
+// are new to the library, which still need their crew looked up.
+function applyFeedEntries(added){
+  const films=STATE._films, byKey=new Map(), byNorm=new Map();
+  const index=f=>{ byKey.set(f.name+'||'+f.year,f); byNorm.set(feedTitle(f.name)+'|'+f.year,f); };
+  films.forEach(index);
+  const newFilms=[], touched=new Set();
+  for(const e of added){
+    let f=byKey.get(e.title+'||'+e.year)||byNorm.get(feedTitle(e.title)+'|'+e.year);
+    if(!f){ f={name:e.title,year:e.year,rating:0,rewatchCount:0}; films.push(f); index(f); newFilms.push(f); }
+    // Stored under the name the library already uses, so every lookup keyed on it still hits
+    STATE._diary.push({name:f.name,year:f.year,rating:e.rating,rewatch:e.rewatch,date:e.date});
+    if(e.rating>0){
+      f.rating=e.rating;
+      const k=f.name+'||'+f.year;
+      if(!STATE._ratedOn[k]) STATE._ratedOn[k]=e.date;
+    }
+    touched.add(f);
+  }
+  STATE._diary=dedupeDiary(STATE._diary);
+  for(const f of touched){
+    const rows=STATE._diary.filter(r=>r.name===f.name&&r.year===f.year);
+    f.rewatchCount=Math.max(f.rewatchCount||0,rows.filter(r=>r.rewatch).length,rows.length-1);
+  }
+  STATE._totalFilms=films.length;
+  return newFilms;
+}
+
+let _lbSyncRun=0;
+async function syncLetterboxd(opts){
+  if(!LB_PROXY||!STATE.lbUser||!(STATE._diary||[]).length||!STATE._films){ renderLbSync(); return; }
+  const runId=STATE.runId, my=++_lbSyncRun;
+  const stale=()=>STATE.runId!==runId||my!==_lbSyncRun;
+  STATE._lbSync={state:'checking'}; renderLbSync();
+  let body=null, status=0;
+  try{
+    const res=await fetch(`${LB_PROXY}/u/${encodeURIComponent(STATE.lbUser)}`);
+    status=res.status;
+    body=await res.json().catch(()=>null);
+  }catch(e){ /* offline or blocked — handled below */ }
+  if(stale()) return;
+  if(status===404){ STATE._lbSync={state:'no-user'}; renderLbSync(); return; }
+  if(!(status===200&&body&&Array.isArray(body.entries))){
+    STATE._lbSync=null; renderLbSync();
+    showToast('Couldn’t reach Letterboxd — showing your saved data');
+    return;
+  }
+  const plan=planFeedMerge(body.entries,STATE._diary);
+  STATE.lbSyncedAt=Date.now();
+  if(plan.gap){ STATE._lbSync={state:'gap'}; renderLbSync(); schedulePersist(); return; }
+  if(!plan.added.length){
+    STATE._lbSync=null; renderLbSync(); schedulePersist();
+    if(opts&&opts.manual) showToast('Up to date with your Letterboxd diary');
+    return;
+  }
+  if(!_tailDone){ await loadDBTail(); if(stale()) return; }
+  const newFilms=applyFeedEntries(plan.added);
+  const {filmData,misses,todo}=lookupFilmsInDB(newFilms);
+  Object.assign(STATE._filmData,filmData);
+  for(const m of misses) STATE._missList.push({name:m.name,year:m.year});
+  STATE._dbMisses=STATE._missList.length;
+  STATE._lbSync={state:'added',entries:plan.added,newFilms:newFilms.length};
+  const y=window.scrollY;
+  rescoreFromState(); invalidateCoverage(); renderResults();   // renderResults persists
+  window.scrollTo(0,y);
+  renderLbSync();
+  const key=getKey('tmdb');
+  if(key&&todo.length) runBackgroundLookups(todo,key,STATE.runId);
+}
+
+function lbNoLink(){ try{ return localStorage.getItem(LB_NOLINK_KEY)==='1'; }catch(e){ return false; } }
+function dismissLbSync(){
+  if(!STATE._lbSync||STATE._lbSync.state==='no-user'){ try{ localStorage.setItem(LB_NOLINK_KEY,'1'); }catch(e){} }
+  STATE._lbSync=null; renderLbSync();
+}
+function linkLetterboxd(){
+  const inp=document.getElementById('lb-user-input');
+  const v=cleanLbUser(inp&&inp.value);
+  if(!v){ showToast('That doesn’t look like a Letterboxd username'); if(inp) inp.focus(); return; }
+  STATE.lbUser=v; STATE._lbSync=null;
+  try{ localStorage.removeItem(LB_NOLINK_KEY); }catch(e){}
+  schedulePersist();
+  syncLetterboxd({manual:true});
+}
+
+function renderLbSync(){
+  const el=document.getElementById('lb-sync');
+  if(!el) return;
+  const s=STATE._lbSync, user=esc(STATE.lbUser||'');
+  const bar=(inner,tone)=>`<div style="background:${tone==='warn'?'#1a1408':'#0c0c18'};border-bottom:1px solid ${tone==='warn'?'#3a2e14':'#151525'};padding:8px 20px;font-size:12px;color:#a9a9bc;display:flex;align-items:center;gap:10px;flex-wrap:wrap">${inner}</div>`;
+  const close=`<button type="button" class="btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;margin-left:auto" onclick="dismissLbSync()" aria-label="Dismiss">✕</button>`;
+  let html='';
+  if(!LB_PROXY||!(STATE._diary||[]).length||!STATE._films) html='';
+  else if(s&&s.state==='checking')
+    html=bar(`<span class="spinner" style="width:12px;height:12px;border-width:2px;margin:0"></span> Checking letterboxd.com/${user} for films logged since this was saved…`);
+  else if(s&&s.state==='added'){
+    const n=s.entries.length;
+    const names=[...new Set(s.entries.map(e=>e.title))];
+    const list=names.slice(0,4).map(t=>`<i style="color:#c8c0ae">${esc(t)}</i>`).join(', ')+(names.length>4?` and ${names.length-4} more`:'');
+    html=bar(`<span style="color:#c8a840">✓</span><span style="flex:1;min-width:0">Added ${n} new diary entr${n!==1?'ies':'y'} from Letterboxd: ${list}.${s.newFilms?` ${s.newFilms} new to your library.`:''} Scores updated.</span>${close}`);
+  }
+  else if(s&&s.state==='gap')
+    html=bar(`<span style="flex:1;min-width:0">You’ve logged more than ${LB_FEED_MAX} films since this was saved. Letterboxd’s feed only reaches back ${LB_FEED_MAX}, so upload a fresh export to catch up.</span>
+      <a href="https://letterboxd.com/settings/data/" target="_blank" rel="noopener" style="color:#c8a840">Get the export ↗</a>
+      <button type="button" class="btn-gold btn-sm" style="padding:2px 10px;font-size:11px" onclick="resetApp()">Upload it</button>${close}`,'warn');
+  else if((s&&s.state==='no-user')||(!STATE.lbUser&&!lbNoLink()))
+    html=bar(`${s&&s.state==='no-user'?`Letterboxd has no member called <b style="color:#c8c0ae">${user}</b>.`:'Keep this up to date from your Letterboxd diary, without re-exporting:'}
+      <input id="lb-user-input" class="input-field" aria-label="Letterboxd username" placeholder="username" maxlength="80" value="${s&&s.state==='no-user'?user:''}" style="padding:3px 8px;font-size:12px;width:140px" onkeydown="if(event.key==='Enter')linkLetterboxd()"/>
+      <button type="button" class="btn-gold btn-sm" style="padding:2px 10px;font-size:11px" onclick="linkLetterboxd()">Link</button>${close}`);
+  el.innerHTML=html; el.style.display=html?'':'none';
+}
+
+// A tab left open for days picks up new logs when it's looked at again
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState!=='visible'||!LB_PROXY||!STATE.lbUser) return;
+  const page=document.getElementById('page-results');
+  if(!page||!page.classList.contains('active')||(STATE._lbSync&&STATE._lbSync.state==='checking')) return;
+  if(Date.now()-(STATE.lbSyncedAt||0)>LB_RECHECK_MS) syncLetterboxd();
+});
+
 // ─── Cache Export ─────────────────────────────────────────────────────────────
 function buildSavePayload(){
   return {
@@ -1702,6 +1893,8 @@ function buildSavePayload(){
                  // 7 = carries dated diary viewings for the history page
                  // 6 = filmog entries are [title, year, runtime, voteAvg, genres]
     userName:STATE.userName,
+    // Letterboxd username and when its diary feed was last read (see syncLetterboxd)
+    lbUser:STATE.lbUser||'', lbSyncedAt:STATE.lbSyncedAt||0,
     exportedAt:new Date().toISOString(),
     minFilms:MIN_FILMS,
     topActors:TOP_ACTORS,
@@ -4322,6 +4515,7 @@ function renderResults(){
   schedulePersist();
   invalidateCoverage();   // scored directors were just rebuilt
   paintNavTitle();
+  renderLbSync();
   // The timeline is only meaningful with dated diary rows, so the tab hides
   // itself rather than offering an empty page to ratings.csv-only uploads.
   const hasDiary=(STATE._diary||[]).length>0;
@@ -6008,7 +6202,7 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
 
     <div style="margin-bottom:18px">
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Your Data</div>
-      <div style="color:#b2b2c4;font-size:13px;line-height:1.8">Your Letterboxd export is processed entirely in your browser. Nothing is sent to any server except the TMDB API for director/writer/actor and streaming lookups. Your API key is stored only in your browser's localStorage and never leaves your device. Your last analysis is remembered in this browser too, so a refresh doesn't mean re-uploading — use <b style="color:#c8c0b0">Forget</b> on the upload page to remove it along with the API key, fetched filmographies and streaming lookups, which is worth doing on a shared computer.</div>
+      <div style="color:#b2b2c4;font-size:13px;line-height:1.8">Your Letterboxd export is processed entirely in your browser. Nothing is sent to any server except the TMDB API for director/writer/actor and streaming lookups — and, once your Letterboxd username is linked, a check of your public Letterboxd diary feed for films logged since your last visit, which goes through this site's own small relay because Letterboxd doesn't allow pages to read it directly. Your API key is stored only in your browser's localStorage and never leaves your device. Your last analysis is remembered in this browser too, so a refresh doesn't mean re-uploading — use <b style="color:#c8c0b0">Forget</b> on the upload page to remove it along with the API key, fetched filmographies and streaming lookups, which is worth doing on a shared computer.</div>
     </div>
 
     <div style="margin-bottom:18px">
