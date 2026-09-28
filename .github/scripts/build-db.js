@@ -11,6 +11,7 @@
  *                                      [--concurrency 8] [--max-age-days 90]
  *                                      [--core 20000] [--dry-run]
  *                                      [--out Pages] [--cache build-cache.json]
+ *                                      [--classics 25000] [--classic-votes 100]
  *
  *   The key comes from the TMDB_KEY environment variable so it stays out of the
  *   shell history and the process list. (--key still works, with a warning.)
@@ -19,8 +20,16 @@
  *   with --out . (the site root) and a cache kept on the repo's db-cache branch.
  *
  * What it does:
- *   1. Downloads TMDB's free daily movie-id export and takes the top --count
- *      films by popularity. That ordering is free: no per-film request needed.
+ *   1. Picks the films from two rankings, merged:
+ *      - today's popularity, from TMDB's free daily movie-id export. It measures
+ *        what is trending, so it finds new releases, but a classic out of season
+ *        sinks: in late September Home Alone ranked 131,076th and X-Men 356,392nd.
+ *      - all-time vote counts, from /discover/movie year by year (--classics,
+ *        default 25000, films with at least --classic-votes votes). It barely
+ *        moves, so the films people actually watch are always in.
+ *      A film's place is its better rank in either list, and the merged list is
+ *      cut at --count. The vote list is kept in the cache, so a failed fetch
+ *      reuses last week's rather than dropping the classics.
  *   2. Reads build-cache.json, the per-film record cache from earlier runs, and
  *      seeds it from the film-db.js on disk (once the DB carries TMDB ids).
  *   3. Fetches only the films the cache lacks or holds stale: never fetched,
@@ -216,6 +225,38 @@ async function downloadMovieIds(count) {
     return ids;
   }
   throw new Error('Could not download the TMDB id export (tried the last three days).');
+}
+
+// ─── Step 1b: the all-time list ──────────────────────────────────────────────
+// Discover pages stop at 500 (10,000 films), so it is asked one release year at
+// a time, most-voted first, down to the vote floor. ~2,000 requests at the default.
+const CLASSICS_FIRST_YEAR = 1890;
+function discoverUrl(year, page, minVotes, key) {
+  return `https://api.themoviedb.org/3/discover/movie?sort_by=vote_count.desc&include_adult=false&include_video=false&primary_release_year=${year}&vote_count.gte=${minVotes}&page=${page}${keyParam(key)}`;
+}
+async function fetchClassics(key, limiter, minVotes, count, concurrency = 8) {
+  const votes = new Map();
+  const years = [];
+  for (let y = new Date(deps.now()).getUTCFullYear(); y >= CLASSICS_FIRST_YEAR; y--) years.push(y);
+  async function worker() {
+    for (let y; (y = years.shift()) !== undefined;) {
+      for (let page = 1; page <= 500; page++) {
+        const data = await fetchJSON(discoverUrl(y, page, minVotes, key), limiter);
+        if (!data || !Array.isArray(data.results)) break;
+        for (const r of data.results) if (r && r.id && !r.adult && !r.video) votes.set(r.id, r.vote_count || 0);
+        if (page >= (data.total_pages || 1)) break;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  return [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, count).map(e => e[0]);
+}
+// Each film at its better rank in either list; ties go to the popularity list
+function mergeRankings(popular, classics, count) {
+  const rank = new Map();
+  popular.forEach((id, i) => rank.set(id, 2 * i));
+  classics.forEach((id, i) => { const r = 2 * i + 1; if (!rank.has(id) || r < rank.get(id)) rank.set(id, r); });
+  return [...rank.keys()].sort((a, b) => rank.get(a) - rank.get(b)).slice(0, count);
 }
 
 // ─── Step 2: one film → one record ───────────────────────────────────────────
@@ -466,6 +507,8 @@ async function main() {
     concurrency: intArg('--concurrency', 8),
     maxAgeDays: intArg('--max-age-days', 90),
     core: intArg('--core', CORE_FILMS),
+    classics: intArg('--classics', 25000),
+    classicVotes: intArg('--classic-votes', 100),
     full: args.includes('--full'),
     dryRun: args.includes('--dry-run'),
     cachePath: CACHE_PATH
@@ -487,7 +530,23 @@ async function main() {
     process.exit(130);
   });
 
-  const ids = await downloadMovieIds(opts.count);
+  const popular = await downloadMovieIds(opts.count);
+  process.stdout.write(`Asking TMDB for the ${opts.classics} most-voted films of all time...`);
+  let classics = [];
+  try {
+    classics = await fetchClassics(API_KEY, makeLimiter(opts.rps), opts.classicVotes, opts.classics);
+    process.stdout.write(` ${classics.length} with ${opts.classicVotes}+ votes\n`);
+    cache.meta.classics = { at: new Date(deps.now()).toISOString(), ids: classics };
+  } catch (e) {
+    if (e.fatal) throw e;
+    const kept = cache.meta.classics;
+    classics = kept && Array.isArray(kept.ids) ? kept.ids : [];
+    process.stdout.write(` failed (${e.message}) — ${classics.length ? `reusing the list from ${String(kept.at || '').slice(0, 10)}` : 'building from popularity alone'}\n`);
+  }
+  const ids = mergeRankings(popular, classics, opts.count);
+  const popSet = new Set(popular), inIds = new Set(ids);
+  const onlyClassic = ids.filter(id => !popSet.has(id)).length;
+  console.log(`Merged: ${ids.length} films — ${onlyClassic} only on the all-time list, ${popular.filter(id => !inIds.has(id)).length} of today's top ${popular.length} left out`);
 
   // Decide what to fetch
   const now = deps.now();
@@ -560,7 +619,7 @@ async function main() {
   if (OUT_DIR === path.join(ROOT, 'Pages')) console.log(`\nDeploy Pages/film-db-core.js and Pages/film-db-tail.js alongside index.html and sw.js.`);
 }
 
-module.exports = { MIN_VOTES, downloadMovieIds, parseExport, mapMovie, isStale, assemble, seedCacheFromDB, parseExistingDB, renderFilmDB, writeFilmDB, fetchJSON, fetchFilms, changeWindows, makeLimiter, makeStats, deps, exportUrlFor };
+module.exports = { MIN_VOTES, downloadMovieIds, fetchClassics, mergeRankings, parseExport, mapMovie, isStale, assemble, seedCacheFromDB, parseExistingDB, renderFilmDB, writeFilmDB, fetchJSON, fetchFilms, changeWindows, makeLimiter, makeStats, deps, exportUrlFor };
 
 if (require.main === module) {
   main().catch(e => { console.error('\nFatal error:', e.message); process.exit(1); });
