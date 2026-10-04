@@ -457,13 +457,17 @@ function dbGrew(){
   invalidateCoverage();
   updateConfigBadge();
   const res=document.getElementById('page-results');
+  // Films in the tail get their current directors too
+  if(STATE._films&&STATE._filmData&&refreshDirectors()) rescoreFromState();
   if(STATE._films&&res&&res.classList.contains('active')){ const y=window.scrollY; renderResults(); window.scrollTo(0,y); }
 }
 
 function parseDBEntry(entry){
   const parts=entry.split('|');
+  const directors=parts[0]?parts[0].split(','):[];
   return{
-    director:parts[0]||null,
+    director:directors[0]||null,   // first credited, for anything that wants one name
+    directors,                     // all of them — DBs before co-directors hold one
     writers:parts[1]?parts[1].split(','):[],
     actors:parts[2]?parts[2].split(','):[],
     genres:parts[3]?parts[3].split(','):[],
@@ -484,6 +488,10 @@ function posterURL(path,size){ return POSTER_RE.test(String(path||''))?POSTER_BA
 // its films has a poster: none → `show` is false and the column is left out
 // entirely, the layout from before posters; some → the rows without one get a
 // quiet monogram tile so the column still lines up.
+// Every director of a film. Data from before co-directors carries only `director`.
+function dirsOf(d){ return d?(Array.isArray(d.directors)&&d.directors.length?d.directors:(d.director?[d.director]:[])):[]; }
+function dirsLabel(names){ return names.length<3?names.join(' & '):names.slice(0,-1).join(', ')+' & '+names[names.length-1]; }
+
 function posterHTML(path,title,w,show){
   if(show===false) return '';
   w=w||40;
@@ -887,7 +895,7 @@ function sanitizeWatchlist(raw){
   for(const f of films){
     const k=f.name+'||'+f.year, d=rd[k];
     if(!d||typeof d!=='object') continue;
-    data[k]={director:typeof d.director==='string'?d.director:null,writers:strs(d.writers),actors:strs(d.actors),
+    data[k]={director:typeof d.director==='string'?d.director:null,directors:strs(d.directors).length?strs(d.directors).slice(0,4):(typeof d.director==='string'?[d.director]:[]),writers:strs(d.writers),actors:strs(d.actors),
       genres:strs(d.genres),voteAvg:Number.isFinite(d.voteAvg)?Math.min(5,Math.max(0,d.voteAvg)):null,
       runtime:Number.isFinite(d.runtime)?d.runtime:0, tmdbId:Number.isFinite(d.tmdbId)?d.tmdbId:null,
       poster:POSTER_RE.test(String(d.poster||''))?d.poster:null};
@@ -985,7 +993,8 @@ async function lookupOneTMDB(film, apiKey, signal){
   const det=await res.json();
   const cred=det.credits||{};
   const crew=cred.crew||[], cast=cred.cast||[];
-  const director=(crew.find(c=>c.job==='Director')||{}).name||null;
+  const directors=[...new Set(crew.filter(c=>c.job==='Director').map(c=>c.name))].slice(0,4);
+  const director=directors[0]||null;
   const writers=[...new Set(crew.filter(c=>WRITING_JOBS.has(c.job)).map(c=>c.name))].slice(0,3);
   const actors=cast.slice(0,10).map(c=>c.name); // store top 10, slice at scoring time per TOP_ACTORS setting
   // Names from the payload rather than genre_ids through TMDB_GENRES. That table
@@ -995,7 +1004,7 @@ async function lookupOneTMDB(film, apiKey, signal){
   const voteAvg=det.vote_average?det.vote_average/2:null;   // TMDB 0-10 → 0-5 scale
   const runtime=parseInt(det.runtime,10)||0;
   const poster=POSTER_RE.test(String(det.poster_path||''))?det.poster_path:null;
-  return {director,writers,actors,genres,voteAvg,runtime,tmdbId:det.id||movie.id||null,poster};
+  return {director,directors,writers,actors,genres,voteAvg,runtime,tmdbId:det.id||movie.id||null,poster};
 }
 
 async function fetchCrewTMDB(films, apiKey, onProg, signal){
@@ -1183,7 +1192,8 @@ function buildPersonMaps(films, filmData){
     // the call order load-bearing and leaked voteAvg into the exported films array.
     const fe=d.voteAvg!=null?Object.assign({},f,{voteAvg:d.voteAvg}):f;
     const addTo=(map,person)=>{ if(!map[person])map[person]=[]; map[person].push(fe); };
-    if(d.director) addTo(byDir,d.director);
+    // A co-directed film counts in full for each of its directors
+    dirsOf(d).forEach(n=>addTo(byDir,n));
     (d.writers||[]).forEach(w=>addTo(byWriter,w));
     (d.actors||[]).slice(0,TOP_ACTORS).forEach(a=>addTo(byActor,a));
     (d.genres||[]).forEach(g=>{ genreCount[g]=(genreCount[g]||0)+1; });
@@ -1225,6 +1235,22 @@ function backfillPosters(){
   }
   return filled;
 }
+// A library scored on an older build keeps that build's directors: one name per
+// film, and for co-directed films whichever one TMDB listed first that week. Take
+// the current database's list wherever it holds the same Title||Year, so scores,
+// coverage and filmographies all read from one source. Returns how many changed.
+function refreshDirectors(){
+  const fd=STATE._filmData; if(!fd) return 0;
+  let n=0;
+  for(const key in fd){
+    const d=fd[key], e=FILM_DB[key];
+    if(!d||!e) continue;
+    const dirs=parseDBEntry(e).directors;
+    if(!dirs.length||dirs.join(',')===dirsOf(d).join(',')) continue;
+    d.directors=dirs; d.director=dirs[0]; n++;
+  }
+  return n;
+}
 function applySavedData(d){
   if(!d||typeof d!=='object') throw new Error('Invalid cache file.');
   if(!d.version||!d.directors) throw new Error('Invalid cache file.');
@@ -1255,6 +1281,7 @@ function applySavedData(d){
     if(!d.films.length||!Object.keys(d.filmData).length) throw new Error('Cache file has no film data.');
     STATE._filmData=d.filmData;
     STATE._films=d.films;
+    refreshDirectors();
     const matched=STATE._matchedFilms;
     rescoreFromState();   // re-score with current weights/settings
     if(matched) STATE._matchedFilms=matched;
@@ -2082,8 +2109,8 @@ function directorIndex(){
     rank++;                       // insertion order = descending TMDB popularity
     const entry=FILM_DB[key];
     const p=entry.indexOf('|');
-    const dir=p<0?entry:entry.slice(0,p);
-    if(!dir) continue;
+    const dirField=p<0?entry:entry.slice(0,p);
+    if(!dirField) continue;
     const i=key.lastIndexOf('||');
     const y=parseInt(key.slice(i+2),10);
     // FILM_DB stores a year but no release date, and TMDB's popularity export
@@ -2107,13 +2134,15 @@ function directorIndex(){
     // Store unfiltered — MIN_RUNTIME and COUNT_DOCS are applied at display time.
     // rank is the film's position in the DB, which build-db.js writes in
     // descending TMDB popularity — a free popularity signal for recommendations.
-    (_dirIndex[dir]||(_dirIndex[dir]=[])).push({
+    const film={
       t:normTitle(title),y,title,rt,g,key,
       va:Number.isFinite(va)?va:null,
       rank:rank,
       poster:POSTER_RE.test(posterTail)?posterTail:null,
       doc:g.split(',').indexOf('Documentary')>=0
-    });
+    };
+    // Co-directors share the one entry; nothing downstream mutates it
+    for(const dir of dirField.split(',')) (_dirIndex[dir]||(_dirIndex[dir]=[])).push(film);
   }
   return _dirIndex;
 }
@@ -3482,7 +3511,8 @@ function buildRecommendations(mode){
   for(const c of cands.values()){
     const f=c.f;
     const d=candidateData(f,c.director);
-    const dirName=d.director||c.director||null;
+    // The director whose filmography put it here; otherwise the co-director you rank
+    const dirName=c.director||dirsOf(d).find(n=>dirByName(n))||d.director||null;
     const dd=dirName?dirByName(dirName):null;
     const cov=c.cov||(dd?getCoverage(dd):null);
     // Only a film that's actually in that filmography's missing list moves completion
@@ -3559,7 +3589,7 @@ function recCardHTML(r,i,gMean,showPosters){
       ${posterHTML(r.poster,r.title,40,showPosters)}
       <div style="flex:1;min-width:0">
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(r.title)}</div>
-        <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${[Number.isFinite(r.year)?r.year:'—',r.director?(r.s.dirE?personLinkHTML(r.director,`<span class="person-name">${esc(r.director)}</span>`):esc(r.director)):'',r.runtime?fmtDuration(r.runtime):''].filter(Boolean).join(' · ')}</div>
+        <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${[Number.isFinite(r.year)?r.year:'—',dirsMetaHTML(r.d,r.s,''),r.runtime?fmtDuration(r.runtime):''].filter(Boolean).join(' · ')}</div>
       </div>
     </div>
     ${r.covTotal!=null?`<div style="color:#9595aa;font-size:11px;margin-bottom:9px">
@@ -3707,9 +3737,12 @@ function buildTasteProfile(){
 function scoreWatchlistFilm(d,taste,weights){
   const W=weights||WL_WEIGHTS;
   const byV=(a,b)=>b.e.v-a.e.v;
-  const dirE=d.director?taste.dir.get(d.director)||null:null;
+  // A co-directed film is as much the film of whichever director you like more
+  const dirs=dirsOf(d).map(n=>({n,e:taste.dir.get(n)||null}));
+  const best=dirs.filter(x=>x.e).sort(byV)[0]||null;
+  const dirE=best?best.e:null, dirName=best?best.n:(d.director||null);
   // A writer-director would otherwise be counted twice for the same credit
-  const writers=(d.writers||[]).filter(n=>n!==d.director).map(n=>({n,e:taste.writer.get(n)})).filter(x=>x.e).sort(byV);
+  const writers=(d.writers||[]).filter(n=>!dirs.some(x=>x.n===n)).map(n=>({n,e:taste.writer.get(n)})).filter(x=>x.e).sort(byV);
   const actors=(d.actors||[]).slice(0,TOP_ACTORS).map(n=>({n,e:taste.actor.get(n)})).filter(x=>x.e).sort(byV);
   const allGenres=d.genres||[];
   const genres=allGenres.map(n=>({n,e:taste.genre.get(n)})).filter(x=>x.e).sort(byV);
@@ -3724,7 +3757,7 @@ function scoreWatchlistFilm(d,taste,weights){
   };
   const wSum=WL_AXES.reduce((s,a)=>s+W[a.k],0)||1;
   const total=WL_AXES.reduce((s,a)=>s+W[a.k]*ax[a.k],0)/wSum;
-  return {ax,total,match:Math.round(50+50*total),dirE,writers,actors,genres};
+  return {ax,total,match:Math.round(50+50*total),dirE,dirName,dirs,writers,actors,genres};
 }
 
 // Everything you've logged, by normalized title — a watchlist entry you've since
@@ -3860,8 +3893,8 @@ function buildWatchlistCardSVG(posters){
   const rows=top.map((x,i)=>{
     const y=300+i*112, {f,d,s}=x;
     const col=s.match>=70?'#6fbf8f':s.match>=55?'#c8a840':'#8888aa';
-    const why=[s.dirE&&s.dirE.v>=0.2?d.director:'', ...s.actors.filter(a=>a.e.v>=0.2).slice(0,2).map(a=>a.n)].filter(Boolean);
-    const meta=[Number.isFinite(f.year)?f.year:'', d.director?'dir. '+d.director:'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
+    const why=[s.dirE&&s.dirE.v>=0.2?s.dirName:'', ...s.actors.filter(a=>a.e.v>=0.2).slice(0,2).map(a=>a.n)].filter(Boolean);
+    const meta=[Number.isFinite(f.year)?f.year:'', dirsOf(d).length?'dir. '+dirsLabel(dirsOf(d)):'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
     const img=posters[f.name+'||'+f.year];
     return `${i?`<line x1="110" y1="${y-42}" x2="${W-110}" y2="${y-42}" stroke="#1a1a2e" stroke-width="2"/>`:''}
       ${img?`<image href="${img}" x="104" y="${y-34}" width="62" height="93" preserveAspectRatio="xMidYMid slice"/>`
@@ -4037,6 +4070,13 @@ function personHistory(name){
 }
 
 // A name that opens its history. `inner` is already-escaped HTML.
+// "dir. A & B", each name a link when you have films of theirs (s from scoreWatchlistFilm)
+function dirsMetaHTML(d,s,prefix){
+  const names=dirsOf(d);
+  if(!names.length) return '';
+  return (prefix??'dir. ')+dirsLabel(names.map(n=>{ const x=s&&s.dirs&&s.dirs.find(y=>y.n===n);
+    return x&&x.e?personLinkHTML(n,`<span class="person-name">${esc(n)}</span>`):esc(n); }));
+}
 function personLinkHTML(name,inner,label){
   return `<button type="button" class="person-link" onclick="openPersonModal(${esc(JSON.stringify(name))})" aria-label="${esc(label||('Your films with '+name))}">${inner}</button>`;
 }
@@ -4100,11 +4140,14 @@ function tasteChips(s,d,title,year,gMean,chip){
   const pchip=(name,txt,col,tip)=>personLinkHTML(name,chip(txt,col,tip+' Click for the films.'),'Your films with '+name);
   const chips=[];
   // The last film standing between you and a 100% filmography — and its bonus
-  const dd=d.director?dirByName(d.director):null, cov=dd?getCoverage(dd):null;
-  if(cov&&cov.missing.length===1&&sameFilm(cov.missing[0],{t:normTitle(title),y:year}))
-    chips.push(chip(`🏁 Completes ${esc(d.director)}`,'#6fbf8f',`The only feature of ${d.director}'s you haven't seen${cov.source==='tmdb'&&COMPLETION_BONUS?` — watching it earns the +${COMPLETION_BONUS} completion bonus`:cov.source==='tmdb'?'':' that the built-in database knows of'}.`));
-  if(s.dirE&&s.dirE.v>=0.2) chips.push(pchip(d.director,pTxt('🎬',d.director,s.dirE),'#c8a840',wlPersonTip('Director',d.director,s.dirE,gMean)));
-  else if(s.dirE&&s.dirE.v<=-0.15) chips.push(pchip(d.director,`🎬 ${esc(d.director)} · below your avg`,'#b07878',wlPersonTip('Director',d.director,s.dirE,gMean)));
+  for(const name of dirsOf(d)){
+    const dd=dirByName(name), cov=dd?getCoverage(dd):null;
+    if(cov&&cov.missing.length===1&&sameFilm(cov.missing[0],{t:normTitle(title),y:year}))
+      chips.push(chip(`🏁 Completes ${esc(name)}`,'#6fbf8f',`The only feature of ${name}'s you haven't seen${cov.source==='tmdb'&&COMPLETION_BONUS?` — watching it earns the +${COMPLETION_BONUS} completion bonus`:cov.source==='tmdb'?'':' that the built-in database knows of'}.`));
+  }
+  const dn=s.dirName;
+  if(s.dirE&&s.dirE.v>=0.2) chips.push(pchip(dn,pTxt('🎬',dn,s.dirE),'#c8a840',wlPersonTip('Director',dn,s.dirE,gMean)));
+  else if(s.dirE&&s.dirE.v<=-0.15) chips.push(pchip(dn,`🎬 ${esc(dn)} · below your avg`,'#b07878',wlPersonTip('Director',dn,s.dirE,gMean)));
   s.writers.filter(w=>w.e.v>=0.2).slice(0,1).forEach(w=>chips.push(pchip(w.n,pTxt('✍️',w.n,w.e),'#9fb0d0',wlPersonTip('Writer',w.n,w.e,gMean))));
   s.actors.filter(a=>a.e.v>=0.2).slice(0,2).forEach(a=>chips.push(pchip(a.n,pTxt('🎭',a.n,a.e),'#c0a0d0',wlPersonTip('Actor',a.n,a.e,gMean))));
   s.genres.filter(g=>g.e.v>=0.25).slice(0,1).forEach(g=>chips.push(chip(`🎞 ${esc(g.n)}`,'#80b0b0',
@@ -4127,7 +4170,7 @@ function wlCardHTML(x,i,gMean,showPosters,owned){
     chips.unshift(chip(`↻ Seen ${s.rewatch.date?fmtSince(s.rewatch.days):'before'}${pts?` · −${pts}`:''}`,'#b08a60',
       `A rewatch — ${s.rewatch.date?`last watched ${s.rewatch.date}`:'logged without a date, so treated as five years ago'}. It drops ${pts} match point${pts!==1?'s':''}; the more recent the watch, the bigger the drop.`));
   }
-  const meta=[Number.isFinite(f.year)?String(f.year):'', d.director?'dir. '+(s.dirE?personLinkHTML(d.director,`<span class="person-name">${esc(d.director)}</span>`):esc(d.director)):'', d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
+  const meta=[Number.isFinite(f.year)?String(f.year):'', dirsMetaHTML(d,s), d.runtime>0?fmtDuration(d.runtime):''].filter(Boolean).join(' · ');
   const W=WL_AXES.map(a=>`${a.label} ${s.ax[a.k]>=0?'+':''}${s.ax[a.k].toFixed(2)}`).join(', ');
   const lb=f.uri||`https://letterboxd.com/search/films/${encodeURIComponent(f.name)}/`;
   return `<div class="card" style="border:1px solid ${col}22">
@@ -4731,7 +4774,7 @@ function hotTakes(){
 function hotRowHTML(r,i,sp,up){
   const stars=x=>'★'.repeat(Math.floor(x))+(x%1>=0.5?'½':'');
   const col=up?'#c8a840':'#9fb0d0';
-  const dir=r.d.director?personLinkHTML(r.d.director,`<span class="person-name">${esc(r.d.director)}</span>`):'';
+  const dir=dirsLabel(dirsOf(r.d).map(n=>personLinkHTML(n,`<span class="person-name">${esc(n)}</span>`)));
   return `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #14141f">
     <span class="mono" style="color:#777787;font-size:11px;width:18px;flex-shrink:0">${i+1}</span>
     ${posterHTML(filmPosterOf(r.f),r.f.name,30,sp)}
@@ -4790,7 +4833,7 @@ function buildHotTakesCardSVG(h,posters){
       const y=y0+62+i*96, img=posters[r.f.name+'||'+r.f.year];
       return `${img?`<image href="${img}" x="110" y="${y-38}" width="56" height="84" preserveAspectRatio="xMidYMid slice"/>`:withP?`<rect x="110.5" y="${y-37.5}" width="55" height="83" rx="4" fill="#0f0f1c" stroke="#1e1e30"/>`:''}
         <text x="${tx}" y="${y}" fill="#f0e8d8" font-size="29" font-family="Georgia,serif" font-weight="bold">${esc(svgTrunc(r.f.name,32))}</text>
-        <text x="${tx}" y="${y+30}" fill="#9595aa" font-size="18" font-family="Georgia,serif">${esc(svgTrunc([Number.isFinite(r.f.year)?r.f.year:'',r.d.director||''].filter(Boolean).join(' · '),44))}</text>
+        <text x="${tx}" y="${y+30}" fill="#9595aa" font-size="18" font-family="Georgia,serif">${esc(svgTrunc([Number.isFinite(r.f.year)?r.f.year:'',dirsLabel(dirsOf(r.d))].filter(Boolean).join(' · '),44))}</text>
         <text x="${W-110}" y="${y}" text-anchor="end" fill="#c8a840" font-size="24" font-family="Georgia,serif">${esc(svgStarsText(r.f.rating))}</text>
         <text x="${W-110}" y="${y+30}" text-anchor="end" fill="${col}" font-size="18" font-family="Georgia,serif">${r.diff>0?'+':'−'}${Math.abs(r.diff).toFixed(1)} vs crowd ★${r.crowd.toFixed(1)}</text>`;
     }).join('');
@@ -5000,7 +5043,7 @@ function histRepeatRows(list){
       <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
         <span style="color:#f0e8d8;font-size:13px;font-weight:600">${esc(f.name)}</span>
         <span class="mono" style="color:#7d7d94;font-size:11px">${Number.isFinite(f.filmYear)?f.filmYear:'—'}</span>
-        ${f.director?`<span style="color:#7d7d94;font-size:11px">${esc(f.director)}</span>`:''}
+        ${f.director?`<span style="color:#7d7d94;font-size:11px">${esc(dirsLabel(dirsOf(f)))}</span>`:''}
         <span style="flex:1"></span>
         <span class="mono" style="color:#83839b;font-size:11px;white-space:nowrap">${f.count}×</span>
       </div>
@@ -5067,7 +5110,7 @@ function histFilmCard(v,i){
     <div style="font-size:15px;font-weight:600;color:#f0e8d8;line-height:1.3;margin-bottom:3px">${esc(v.name)}</div>
     <div style="color:#83839b;font-size:11px;margin-bottom:8px">${Number.isFinite(v.filmYear)?v.filmYear:'—'}</div>
     ${v.director
-      ? `<div style="color:${open?'#c8a840':'#c8c0ae'};font-size:12px">${esc(v.director)}${open?' <span aria-hidden="true" style="opacity:.7">›</span>':''}</div>`
+      ? `<div style="color:${open?'#c8a840':'#c8c0ae'};font-size:12px">${esc(dirsLabel(dirsOf(v)))}${open?' <span aria-hidden="true" style="opacity:.7">›</span>':''}</div>`
       : '<div style="color:#7a7a92;font-size:12px">Director unknown</div>'}
     ${g?`<div style="color:#7d7d94;font-size:11px;margin-top:3px">${esc(g)}</div>`:''}
     <div style="color:#7d7d94;font-size:10px;margin-top:10px;border-top:1px solid #14141f;padding-top:7px">Watched ${histDate(v.date)}</div>
@@ -5088,7 +5131,7 @@ function openHistList(year,kind,idx){
   else if(kind==='dow'){ rows=rows.filter(v=>v.dow===idx); title=DOW_LONG[idx]+'s'+(year?' in '+year:''); }
   else if(kind==='rating'){ rows=rows.filter(v=>v.rating>0&&Math.round(v.rating*2)-1===idx);
     title='Rated '+histStars((idx+1)/2)+(year?' in '+year:''); }
-  else if(kind==='director'){ rows=rows.filter(v=>v.director===idx); title=idx+(year?' in '+year:''); }
+  else if(kind==='director'){ rows=rows.filter(v=>dirsOf(v).includes(idx)); title=idx+(year?' in '+year:''); }
   else return;
   if(!rows.length) return;
 
@@ -5159,7 +5202,7 @@ function buildYearCardSVG(y){
     return `<text x="110" y="${yy}" fill="${RANK_COLORS[i]}" font-size="24" font-family="Georgia,serif" font-weight="bold">${i+1}</text>
       <text x="150" y="${yy}" fill="#f0e8d8" font-size="27" font-family="Georgia,serif">${esc(svgTrunc(v.name,40))}</text>
       <text x="${W-110}" y="${yy}" text-anchor="end" fill="#c8a840" font-size="24" font-family="Georgia,serif">${esc(svgStarsText(v.rating))}</text>
-      <text x="150" y="${yy+24}" fill="#7d7d94" font-size="17" font-family="Georgia,serif">${esc([Number.isFinite(v.filmYear)?v.filmYear:'',v.director||''].filter(Boolean).join(' · '))}</text>`;
+      <text x="150" y="${yy+24}" fill="#7d7d94" font-size="17" font-family="Georgia,serif">${esc([Number.isFinite(v.filmYear)?v.filmYear:'',dirsLabel(dirsOf(v))].filter(Boolean).join(' · '))}</text>`;
   }).join('');
   const lean=(y.genreUp||[])[0];
   const facts=[`Busiest month: ${MONTHS_LONG[y.peakMonth]}`, lean?`Leaning into ${lean.key}`:'', y.streak>2?`${y.streak}-day streak`:''].filter(Boolean).join('   ·   ');
@@ -5723,7 +5766,7 @@ function repeatFilms(views){
     const rated=vs.filter(v=>v.rating>0);
     const first=rated.length?rated[0].rating:null;
     const last=rated.length?rated[rated.length-1].rating:null;
-    out.push({name:vs[0].name, filmYear:vs[0].filmYear, director:vs[0].director,
+    out.push({name:vs[0].name, filmYear:vs[0].filmYear, director:vs[0].director, directors:vs[0].directors,
       count:vs.length, views:vs.map(v=>({date:v.date,rating:v.rating})),
       first, last, change:rated.length>1?last-first:null,
       lastDate:vs[vs.length-1].date});
@@ -5753,7 +5796,7 @@ function paceOf(year, rows){
 // them, then where they stand on your all-time list.
 function yearDirectors(rows,dirScore){
   const by={};
-  for(const v of rows) if(v.director) (by[v.director]||(by[v.director]=[])).push(v);
+  for(const v of rows) for(const n of dirsOf(v)) (by[n]||(by[n]=[])).push(v);
   return Object.entries(by).map(([name,vs])=>{
     const rated=vs.filter(v=>v.rating>0);
     const titles=[];
@@ -5794,6 +5837,7 @@ function computeHistory(){
       revisit:isRevisit(v,key),
       y:+v.date.slice(0,4), mo:+v.date.slice(5,7)-1,
       director:(d&&d.director)||null,
+      directors:dirsOf(d),
       genres:(d&&d.genres)||[],
       runtime:(d&&Number.isFinite(d.runtime)&&d.runtime>0)?d.runtime:0,
       voteAvg:(d&&d.voteAvg!=null&&d.voteAvg>0)?d.voteAvg:null,
@@ -5811,15 +5855,14 @@ function computeHistory(){
   // Earliest diary viewing per director. "New" means new to the diary — if you
   // logged a backlog without dates, this can't know you'd seen them before.
   const firstSeen={}, byDirector={}, firstWasNew={};
-  for(const v of views){
-    if(!v.director) continue;
-    if(!firstSeen[v.director]||v.date<firstSeen[v.director]){
-      firstSeen[v.director]=v.date;
+  for(const v of views) for(const n of dirsOf(v)){
+    if(!firstSeen[n]||v.date<firstSeen[n]){
+      firstSeen[n]=v.date;
       // If the earliest entry we hold is itself a revisit, you knew this director
       // before the diary did, so the year can't claim to have found them.
-      firstWasNew[v.director]=!v.revisit;
+      firstWasNew[n]=!v.revisit;
     }
-    (byDirector[v.director]||(byDirector[v.director]=[])).push(v);
+    (byDirector[n]||(byDirector[n]=[])).push(v);
   }
 
   // Rank a year's films: your rating first, then how highly that director scores
@@ -5832,6 +5875,7 @@ function computeHistory(){
   // count everywhere else: the totals, the average, the hours, the trends.
   const dirScore={};
   (STATE.directors||[]).forEach(d=>{ dirScore[d.name]=d.score||0; });
+  const ds=v=>Math.max(0,...dirsOf(v).map(n=>dirScore[n]||0));   // a co-directed film ranks by its better director
   const pickTop=rows=>{
     const best={};
     for(const v of rows){
@@ -5841,7 +5885,7 @@ function computeHistory(){
     }
     return Object.values(best).sort((a,b)=>
       (b.rating-a.rating)
-      ||((dirScore[b.director]||0)-(dirScore[a.director]||0))
+      ||(ds(b)-ds(a))
       ||(a.date<b.date?-1:a.date>b.date?1:0)).slice(0,4);
   };
 
