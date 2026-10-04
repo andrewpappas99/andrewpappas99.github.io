@@ -381,7 +381,9 @@ const WL_AXES = [
 // Genres get a heavier prior because every library holds dozens of each.
 const TASTE_PRIOR_PERSON = 2, TASTE_PRIOR_GENRE = 6;
 const WL_SHOWN = 48;         // cards before "show all"
-const WL_RUNTIMES = [0, 90, 120, 150];   // "any length", then upper limits in minutes
+// "any length", then upper limits in minutes. Most features run a little past 90
+// or 120, so limits there hid nearly everything; these sit just above the clusters.
+const WL_RUNTIMES = [0, 100, 130, 180];
 const WL_PICK_POOL = 10;     // Surprise me draws from this many of the best matches
 const WL_MAX_FILMS = 3000;   // Letterboxd watchlists can be long; beyond this is noise
 
@@ -1275,7 +1277,9 @@ function applySavedData(d){
   if(d.recSource==='directors'||d.recSource==='watchlist'||d.recSource==='owned') STATE.recSource=d.recSource;
   mergeOwned(d.owned);
   mergeHidden(d.hidden);
-  if(WL_RUNTIMES.includes(d.wlMaxRuntime)) STATE.wlMaxRuntime=d.wlMaxRuntime;
+  // Saves from before the presets moved carry 90/120/150
+  const rt=({90:100,120:130,150:180})[d.wlMaxRuntime]??d.wlMaxRuntime;
+  if(WL_RUNTIMES.includes(rt)) STATE.wlMaxRuntime=rt;
   if(typeof d.recPeople==='boolean') STATE.recPeople=d.recPeople;
   if(typeof d.wlStreamOnly==='boolean') STATE.wlStreamOnly=d.wlStreamOnly;
 }
@@ -2225,29 +2229,60 @@ function coverageFilms(d){
   return all||d.films||[];
 }
 
+// Every logged film by normalized title, for loggedMatch below
+let _loggedIdx=null, _loggedFor=null;
+function loggedIndex(){
+  if(_loggedFor===STATE._films&&_loggedIdx) return _loggedIdx;
+  _loggedIdx=new Map(); _loggedFor=STATE._films;
+  for(const f of STATE._films||[]){
+    const t=normTitle(f.name);
+    (_loggedIdx.get(t)||_loggedIdx.set(t,[]).get(t)).push(f);
+  }
+  return _loggedIdx;
+}
+function loggedMatch(e){
+  const c=loggedIndex().get(e.t);
+  return c&&c.find(f=>Math.abs(f.year-e.y)<=1)||null;
+}
+
+// A co-directed film is filed under one director, and TMDB's order for co-credits
+// flips between weekly builds. A library scored on an older build kept Cloudy with
+// a Chance of Meatballs under Christopher Miller while the new build lists it under
+// Phil Lord, so his filmography showed it unseen. Any filmography entry the user
+// has logged counts as seen, whoever their copy is filed under.
+function withLogged(seen,filmog){
+  const out=seen.slice();
+  for(const e of filmog){
+    if(out.some(x=>sameFilm(x,e))) continue;
+    const f=loggedMatch(e);
+    if(f) out.push(Object.assign(seenEntry(f),{rt:e.rt,g:e.g,doc:e.doc}));
+  }
+  return out;
+}
+
 function computeCoverage(d){
   const allSeen=coverageFilms(d).map(seenEntry);
-  const seen=allSeen.filter(isFeature);
-  // seenList is what the fraction actually counted, so the modal can list exactly
-  // those rather than every logged title
-  const extra={seenList:seen.map(e=>e.src),seenExcluded:allSeen.length-seen.length};
   const rec=STATE._filmog&&STATE._filmog[d.name];
+  let all;
   if(rec){
-    const all=rec.f.map(a=>{
+    all=rec.f.map(a=>{
       const title=a[0], g=a[4]||'';
       // t and doc are both derived, so no stored field can contradict another
       return {t:normTitle(title),y:a[1],title,rt:a[2]||0,va:a[3]||null,g,rank:null,poster:a[5]||null,
               doc:g.split(',').indexOf('Documentary')>=0};
     });
-    const kept=all.filter(isFeature);
-    return Object.assign(coverageFrom(kept,seen),extra,
-      {source:'tmdb',truncated:!!rec.tr,excluded:all.length-kept.length});
+  }else{
+    all=directorIndex()[d.name];
+    if(!all||!all.length) return null;
   }
-  const filmog=directorIndex()[d.name];
-  if(!filmog||!filmog.length) return null;
-  const kept=filmog.filter(isFeature);
+  const kept=all.filter(isFeature);
+  const seen=withLogged(allSeen,kept).filter(isFeature);
+  // seenList is what the fraction actually counted, so the modal can list exactly
+  // those rather than every logged title
+  const extra={seenList:seen.map(e=>e.src),seenExcluded:allSeen.length-allSeen.filter(isFeature).length};
   return Object.assign(coverageFrom(kept,seen),extra,
-    {source:'db',truncated:false,excluded:filmog.length-kept.length});
+    rec?{source:'tmdb',truncated:!!rec.tr,excluded:all.length-kept.length}
+       :{source:'db',truncated:false,excluded:all.length-kept.length});
 }
 
 // ─── Exact filmography via TMDB ───────────────────────────────────────────────
@@ -2789,6 +2824,106 @@ function blindSpotsHTML(){
     <div class="eyebrow" style="margin-bottom:6px">Blind spots</div>
     <div style="color:#8c8ca2;font-size:11px;max-width:640px">How much of the ${BLIND_TOP} best-known films in each genre and decade you have seen, least first — with the biggest ones you are missing.</div>
     ${grid('Genres',b.genres)}${grid('Decades',b.decades)}</div>`;
+}
+
+// ─── Directors to explore ─────────────────────────────────────────────────────
+// Directors you have barely started: fewer than EXPLORE_MAX_SEEN of their films
+// logged, and enough left to make a run of it. Three reasons to suggest one —
+// their films are everywhere (popularity, from the DB's order), their films are
+// well regarded (community score), or you rated the one you saw highly — blended
+// for the default view, or picked one at a time. Someone you have seen and
+// disliked is left out; that is a verdict, not a blind spot.
+const EXPLORE_MAX_SEEN=3, EXPLORE_MIN_UNSEEN=2, EXPLORE_SHOWN=8, EXPLORE_PICKS=3;
+const EXPLORE_FAME_RANK=1500;   // a film at this DB rank counts half as famous as #1
+const EXPLORE_VIEWS={
+  mix:     {label:'Best mix',       hint:'Popular, acclaimed, and close to your taste'},
+  liked:   {label:'You liked one',  hint:'You rated one of their films highly'},
+  acclaim: {label:'Acclaimed',      hint:'Their films score highest with audiences'},
+  popular: {label:'Popular',        hint:'Their films are the most widely seen'}
+};
+let _exploreCache=null, _exploreFor=null;
+function exploreDirectors(){
+  const idx=directorIndex();
+  if(_exploreCache&&_exploreFor&&_exploreFor[0]===idx&&_exploreFor[1]===STATE._films) return _exploreCache;
+  const gMean=STATE._globalMean??3.5, out=[];
+  for(const name in idx){
+    const feats=idx[name].filter(isFeature);
+    if(feats.length<EXPLORE_MAX_SEEN) continue;
+    const seen=[], unseen=[];
+    for(const e of feats){ const f=loggedMatch(e); if(f) seen.push({e,f}); else unseen.push(e); }
+    if(seen.length>=EXPLORE_MAX_SEEN||unseen.length<EXPLORE_MIN_UNSEEN) continue;
+    const rated=seen.filter(x=>x.f.rating>0);
+    const best=rated.reduce((m,x)=>Math.max(m,x.f.rating),0);
+    const avg=rated.length?rated.reduce((s,x)=>s+x.f.rating,0)/rated.length:0;
+    if(rated.length&&avg<gMean-0.5&&best<gMean+0.5) continue;
+    let fame=0, vs=0, vw=0;
+    for(const e of feats){
+      const w=1/(1+e.rank/EXPLORE_FAME_RANK);
+      fame+=w;
+      if(e.va>0){ vs+=e.va*w; vw+=w; }
+    }
+    // Shrunk toward an ordinary 3.2 so two well-scored films don't outrank a career
+    const acclaim=(vs+3.2*0.5)/(vw+0.5);
+    out.push({name,feats,seen,unseen,best,fame,acclaim,
+      liked:best>=Math.max(3.5,gMean+0.5)});
+  }
+  const maxFame=out.reduce((m,d)=>Math.max(m,d.fame),0)||1;
+  for(const d of out){
+    d.fameN=Math.sqrt(d.fame/maxFame);                       // a few giants shouldn't flatten the rest
+    d.accN=Math.max(0,Math.min(1,(d.acclaim-3.0)/1.0));       // 3.0★ → 0, 4.0★ → 1
+    d.loveN=d.best?Math.max(0,Math.min(1,(d.best-gMean+0.5)/2)):0;
+    d.mix=0.35*d.fameN+0.4*d.accN+0.25*d.loveN;
+    // Best unseen first: well known and well regarded. Score above a mediocre 2.5★,
+    // so a famous dud (The Sea of Trees) doesn't lead on popularity alone.
+    const pickV=e=>Math.max(0.1,(e.va||3)-2.5)/(1+e.rank/EXPLORE_FAME_RANK);
+    d.unseen.sort((a,b)=>pickV(b)-pickV(a));
+  }
+  _exploreFor=[idx,STATE._films];
+  return (_exploreCache=out);
+}
+function exploreList(view){
+  const all=exploreDirectors();
+  const pick={
+    mix:    [all, d=>d.mix],
+    liked:  [all.filter(d=>d.liked), d=>d.loveN*0.6+d.accN*0.25+d.fameN*0.15],
+    acclaim:[all.filter(d=>d.fameN>0.15&&d.feats.length>=4), d=>d.accN*0.8+d.fameN*0.2],   // one franchise's three films isn't a body of work
+    popular:[all, d=>d.fameN*0.8+d.accN*0.2]
+  }[view]||[all,d=>d.mix];
+  return pick[0].map(d=>({d,s:pick[1](d)})).sort((a,b)=>b.s-a.s).map(x=>x.d);
+}
+function setExploreView(v){ STATE._exploreView=EXPLORE_VIEWS[v]?v:'mix'; renderRecsPanel(); }
+function exploreHTML(){
+  if(!STATE._films||!Object.keys(FILM_DB).length) return '';
+  const view=STATE._exploreView||'mix';
+  const list=[];
+  for(const d of exploreList(view)){
+    const picks=d.unseen.filter(e=>!isHidden(e.title,e.y)).slice(0,EXPLORE_PICKS);
+    if(picks.length) list.push({d,picks});
+    if(list.length>=EXPLORE_SHOWN) break;
+  }
+  const sp=anyPoster(list.flatMap(x=>x.picks));
+  const stars=r=>'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':'');
+  const card=({d,picks})=>{
+    const why=[
+      d.liked?`you gave ${esc(d.seen.reduce((b,x)=>x.f.rating>b.f.rating?x:b).f.name)} <span style="color:#c8a840">${stars(d.best)}</span>`:'',
+      d.accN>=0.6?`avg ${d.acclaim.toFixed(1)}★ on TMDB`:'',
+      d.fameN>=0.5?'widely seen':''
+    ].filter(Boolean).join(' · ');
+    return `<div style="background:#0d0d1c;border:1px solid #1a1a2e;border-radius:10px;padding:12px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:4px"><span style="color:#f0e8d8;font-size:13px;font-weight:bold">${esc(d.name)}</span><span class="mono" title="features you've logged, of those in the built-in database" style="color:#8c8ca2;font-size:12px">${d.seen.length} / ${d.feats.length}</span></div>
+    <div style="color:#8c8ca2;font-size:11px;margin-bottom:8px;min-height:14px">${why}</div>
+    <div style="display:flex;flex-direction:column;gap:5px">${picks.map(f=>`<div style="display:flex;gap:8px;align-items:center">${posterHTML(f.poster,f.title,22,sp)}<span style="color:#c8c0ae;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.title)} <span style="color:#7d7d94">${f.y}</span></span>${justWatchLinkHTML(f.title,'#9a9ab4','small')}</div>`).join('')}</div>
+  </div>`;
+  };
+  const chips=Object.keys(EXPLORE_VIEWS).map(k=>{ const on=k===view, v=EXPLORE_VIEWS[k];
+    return `<button onclick="setExploreView('${k}')" title="${esc(v.hint)}" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${esc(v.label)}</button>`; }).join('');
+  return `<div style="margin-top:40px">
+    <div class="eyebrow" style="margin-bottom:6px">Directors to explore</div>
+    <div style="color:#8c8ca2;font-size:11px;max-width:640px;margin-bottom:10px">Directors you've seen fewer than ${EXPLORE_MAX_SEEN} films by, with their best-known ones you haven't. ${esc(EXPLORE_VIEWS[view].hint)}.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${chips}</div>
+    ${list.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${list.map(card).join('')}</div>`
+      :`<div style="color:#7d7d94;font-size:12px">Nobody fits — ${view==='liked'?'no director you rated highly has films left that you haven’t seen':'try another view'}.</div>`}
+  </div>`;
 }
 
 // ─── Export to a Letterboxd list ──────────────────────────────────────────────
@@ -3500,7 +3635,7 @@ function renderRecsPanel(){
   if(!recs.length){
     el.innerHTML=header+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">Nothing to recommend${anyFilter()?' in '+esc(filterLabel()):''} — you've seen everything we know of.</div>
-      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>${hiddenListHTML()}`;
+      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>${exploreHTML()}${hiddenListHTML()}`;
     return;
   }
   const gMean=buildTasteProfile().gMean;
@@ -3514,6 +3649,7 @@ function renderRecsPanel(){
       </div>
       <button class="btn-ghost btn-sm" onclick="exportLetterboxdList('recs')" title="Download these as a CSV that Letterboxd imports as a list">↓ Letterboxd list</button>
     </div>
+    ${exploreHTML()}
     ${hiddenListHTML()}
     ${blindSpotsHTML()}`;
 }
@@ -4089,7 +4225,7 @@ function watchlistBodyHTML(){
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
       <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin-right:2px">Length</span>
       ${WL_RUNTIMES.map(m=>{ const on=STATE.wlMaxRuntime===m;
-        return `<button onclick="setWlRuntime(${m})" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${m?'Under '+fmtDuration(m):'Any'}</button>`; }).join('')}
+        return `<button onclick="setWlRuntime(${m})" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${m?'Up to '+(m%60?m+' min':fmtDuration(m)):'Any'}</button>`; }).join('')}
       <span style="width:1px;height:18px;background:#1e1e2e;margin:0 4px"></span>
       ${streamingOn()
         ? `<label style="display:flex;align-items:center;gap:6px;color:#a9a9bc;font-size:12px;cursor:pointer" title="Only films streaming on your services (or anywhere, with none picked)">
@@ -4381,7 +4517,7 @@ function ownedBodyHTML(){
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
       <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin-right:2px">Length</span>
       ${WL_RUNTIMES.map(m=>{ const on=STATE.wlMaxRuntime===m;
-        return `<button onclick="setWlRuntime(${m})" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${m?'Under '+fmtDuration(m):'Any'}</button>`; }).join('')}
+        return `<button onclick="setWlRuntime(${m})" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${m?'Up to '+(m%60?m+' min':fmtDuration(m)):'Any'}</button>`; }).join('')}
       <span style="width:1px;height:18px;background:#1e1e2e;margin:0 4px"></span>
       <label style="display:flex;align-items:center;gap:6px;color:#a9a9bc;font-size:12px;cursor:pointer" title="Rank films you've already seen too, lower the more recently you watched them">
         <input type="checkbox" ${ownedRewatch()?'checked':''} onchange="setOwnedRewatch(this.checked)" style="accent-color:#b08a60;cursor:pointer"/>Include rewatches</label>
