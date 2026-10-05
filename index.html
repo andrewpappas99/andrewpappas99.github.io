@@ -2849,7 +2849,7 @@ function blindSpotsHTML(){
   </div>`;
   const grid=(title,list)=>list.length?`<div style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin:14px 0 8px">${title}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${list.slice(0,BLIND_SHOWN).map(row).join('')}</div>`:'';
-  return `<div style="margin-top:40px">
+  return `<div id="sec-blind" style="margin-top:40px;scroll-margin-top:110px">
     <div class="eyebrow" style="margin-bottom:6px">Blind spots</div>
     <div style="color:#8c8ca2;font-size:11px;max-width:640px">How much of the ${BLIND_TOP} best-known films in each genre and decade you have seen, least first — with the biggest ones you are missing.</div>
     ${grid('Genres',b.genres)}${grid('Decades',b.decades)}</div>`;
@@ -2946,7 +2946,7 @@ function exploreHTML(){
   };
   const chips=Object.keys(EXPLORE_VIEWS).map(k=>{ const on=k===view, v=EXPLORE_VIEWS[k];
     return `<button onclick="setExploreView('${k}')" title="${esc(v.hint)}" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${esc(v.label)}</button>`; }).join('');
-  return `<div style="margin-top:40px">
+  return `<div id="sec-explore" style="margin-top:40px;scroll-margin-top:110px">
     <div class="eyebrow" style="margin-bottom:6px">Directors to explore</div>
     <div style="color:#8c8ca2;font-size:11px;max-width:640px;margin-bottom:10px">Directors you've seen fewer than ${EXPLORE_MAX_SEEN} films by, with their best-known ones you haven't. ${esc(EXPLORE_VIEWS[view].hint)}.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${chips}</div>
@@ -3608,6 +3608,17 @@ function recCardHTML(r,i,gMean,showPosters){
   </div>`;
 }
 
+// The extra sections sit under three dozen cards — fifteen screens down on a
+// phone — so the top of the panel links straight to them.
+function jumpTo(id){ const el=document.getElementById(id); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); }
+function recsJumpHTML(items){
+  items=items.filter(Boolean);
+  if(!items.length) return '';
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-6px 0 16px">
+    <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase">Jump to</span>
+    ${items.map(([id,label])=>`<button type="button" onclick="jumpTo('${id}')" style="background:none;border:1px solid #2a2a40;color:#c8c0b0;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${label} ↓</button>`).join('')}
+  </div>`;
+}
 function renderRecsPanel(){
   const el=document.getElementById('cat-recs');
   if(!el) return;
@@ -3637,7 +3648,7 @@ function renderRecsPanel(){
       ${src('directors','🎬 From people you love')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}${src('owned','📀 My collection'+(ownN?` <span class="mono" style="color:#c8a840">${ownN}</span>`:''))}
     </div>`;
 
-  if(onWl){ el.innerHTML=header+watchlistBodyHTML()+blindSpotsHTML(); hydrateProviders(); return; }
+  if(onWl){ const bs=blindSpotsHTML(); el.innerHTML=header+recsJumpHTML([bs&&['sec-blind','🕳 Blind spots']])+watchlistBodyHTML()+bs; hydrateProviders(); return; }
   if(onOwn){ const keep=captureOwnedInput(); el.innerHTML=header+ownedBodyHTML(); restoreOwnedInput(keep); return; }
 
   const tabs=Object.keys(REC_MODES).map(k=>{
@@ -3662,16 +3673,18 @@ function renderRecsPanel(){
       </label>
     </div>`;
 
+  const ex=exploreHTML(), bs=blindSpotsHTML();
+  const jump=recsJumpHTML([ex&&['sec-explore','🧭 Directors to explore'],bs&&['sec-blind','🕳 Blind spots']]);
   if(!recs.length){
-    el.innerHTML=header+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
+    el.innerHTML=header+jump+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">Nothing to recommend${anyFilter()?' in '+esc(filterLabel()):''} — you've seen everything we know of.</div>
-      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>${exploreHTML()}${hiddenListHTML()}`;
+      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>${ex}${hiddenListHTML()}${bs}`;
     return;
   }
   const gMean=buildTasteProfile().gMean;
   setTimeout(hydrateProviders,0);
   const recPosters=anyPoster(recs);
-  el.innerHTML=header+modes+`<div class="dir-grid">${recs.map((r,i)=>recCardHTML(r,i,gMean,recPosters)).join('')}</div>
+  el.innerHTML=header+jump+modes+`<div class="dir-grid">${recs.map((r,i)=>recCardHTML(r,i,gMean,recPosters)).join('')}</div>
     <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-top:20px">
       <div style="color:#777787;font-size:11px;line-height:1.7;flex:1;min-width:240px">
         Drawn from ${STATE.directors.length} qualifying directors${STATE.recPeople?' plus the actors and writers you rate highest':''}. Coverage marked “est.” comes from the built-in database,
@@ -3679,9 +3692,9 @@ function renderRecsPanel(){
       </div>
       <button class="btn-ghost btn-sm" onclick="exportLetterboxdList('recs')" title="Download these as a CSV that Letterboxd imports as a list">↓ Letterboxd list</button>
     </div>
-    ${exploreHTML()}
+    ${ex}
     ${hiddenListHTML()}
-    ${blindSpotsHTML()}`;
+    ${bs}`;
 }
 
 // ─── Taste profile ────────────────────────────────────────────────────────────
