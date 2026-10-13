@@ -372,8 +372,8 @@ let COMPLETION_BONUS = COMPLETION_BONUS_DEFAULT;
 // lookup knows little about sits mid-table rather than at the bottom.
 const WL_WEIGHTS_DEFAULT = { director:30, writer:15, actor:25, genre:20, acclaim:10 };
 // Films Rushmore — see rankFilms
-const FILM_WEIGHTS_DEFAULT = Object.freeze({ rating:60, rewatches:20, people:20 });
-const FILM_KEYS = ['rating','rewatches','people'];
+const FILM_WEIGHTS_DEFAULT = Object.freeze({ rating:40, crowd:25, rewatches:15, people:20 });
+const FILM_KEYS = ['rating','crowd','rewatches','people'];
 let FILM_WEIGHTS = Object.assign({}, FILM_WEIGHTS_DEFAULT);
 let WL_WEIGHTS = Object.assign({}, WL_WEIGHTS_DEFAULT);
 const WL_AXES = [
@@ -4905,16 +4905,22 @@ async function downloadHotTakesCard(){
 }
 
 // ─── Films Rushmore ───────────────────────────────────────────────────────────
-// Your four favourite films, not people. Three signals, each on a 0..1 scale:
+// Your four favourite films, not people. Four signals, each on a 0..1 scale:
 //   rating     how far above your own average you rated it, so a 5★ fills the
 //              bar and anything at or below your average adds nothing
+//   crowd      how far above the TMDB average you rated it — a star over fills
+//              the bar, level sits at half. It's what makes the four yours
+//              rather than the canon: a 5★ for a 4.4 crowd-pleaser counts for
+//              less than a 5★ for a film the crowd gave 3.4. Films with no
+//              crowd score sit at half, neither for nor against.
 //   rewatches  log-scaled against your most-rewatched film — going back is the
 //              plainest vote there is, but the tenth sitting isn't ten times the first
 //   people     how high its director, writers and leading actors stand on your
 //              other Rushmores: half the best-placed director, a quarter each for
 //              the best-placed writer and actor
-// Rating keeps most of the weight on purpose: favourite people and rewatches
-// decide between films you rated alike, they don't lift a 3½★ film over a 5★.
+// Rating keeps the most weight on purpose: the other three decide between films
+// you rated alike, they don't lift a 3½★ film over a 5★. The four faces are then
+// picked so no director, writer or leading actor appears twice (see pickFilmRushmore).
 // Unrated films are left out — a favourites list can't place a film you never
 // scored — unless the whole library is unrated, when every rating counts as equal.
 // Follows the genre and decade chips like the person tabs.
@@ -4948,10 +4954,13 @@ function rankFilms(){
     pool.push({f,d});
   }
   const maxRw=pool.reduce((m,x)=>Math.max(m,x.f.rewatchCount||0),0);
-  const W=FILM_WEIGHTS, wSum=FILM_KEYS.reduce((t,k)=>t+W[k],0)||1;
+  const W=FILM_WEIGHTS, w=k=>W[k]||0, wSum=FILM_KEYS.reduce((t,k)=>t+w(k),0)||1;
   const ranked=pool.map(({f,d})=>{
     const ratingScore=unrated?0.5:Math.max(0,Math.min(1,(f.rating-gMean)/span));
     const rewatchScore=maxRw?Math.log2(1+(f.rewatchCount||0))/Math.log2(1+maxRw):0;
+    const crowd=d&&d.voteAvg>0?d.voteAvg:null;
+    const crowdDiff=crowd!=null&&f.rating>0?f.rating-crowd:null;
+    const crowdScore=crowdDiff==null?0.5:Math.max(0,Math.min(1,0.5+crowdDiff/2));
     const why=[]; let peopleScore=0;
     if(d) for(const [k,label,map,names] of roles){
       let best=null;
@@ -4960,9 +4969,9 @@ function rankFilms(){
       peopleScore+=FILM_PEOPLE_SPLIT[k]*best.v;
       if(best.v>0) why.push({role:k,label,name:best.name,rank:best.rank,v:best.v});
     }
-    const score=(W.rating*ratingScore+W.rewatches*rewatchScore+W.people*peopleScore)/wSum;
+    const score=(w('rating')*ratingScore+w('crowd')*crowdScore+w('rewatches')*rewatchScore+w('people')*peopleScore)/wSum;
     return {name:f.name,year:f.year,f,d,rating:f.rating,rewatchCount:f.rewatchCount||0,
-      ratingScore,rewatchScore,peopleScore,score,
+      ratingScore,crowd,crowdDiff,crowdScore,rewatchScore,peopleScore,score,
       // A writer-director counts in both roles but is named once, at their best place
       why:why.sort((a,b)=>b.v-a.v||a.rank-b.rank).filter((w,i,all)=>all.findIndex(x=>x.name===w.name)===i)};
   });
@@ -4970,6 +4979,26 @@ function rankFilms(){
     ||((b.d&&b.d.voteAvg)||0)-((a.d&&a.d.voteAvg)||0)||a.name.localeCompare(b.name));
   return {ranked,skipped,unrated,maxRw};
 }
+
+// The four faces, best first, with nobody on two of them: a film whose director,
+// writer or leading actor is already up there gives way to the next film down.
+// Otherwise a Tarantino fan's mountain is four Tarantinos, which says less about
+// their taste than one Tarantino and three others. A library too narrow to fill
+// four faces that way falls back on the best of the films that gave way.
+function filmPeople(r){ return r.d?[...new Set([...dirsOf(r.d),...(r.d.writers||[]),...(r.d.actors||[]).slice(0,TOP_ACTORS)])]:[]; }
+function pickFilmRushmore(ranked){
+  const top=[], owner=new Map(), bumped=new Map();
+  for(const r of ranked){
+    if(top.length>=4) break;
+    const people=filmPeople(r), clash=people.find(n=>owner.has(n));
+    if(clash){ bumped.set(r,{name:clash,pick:owner.get(clash)}); continue; }
+    top.push(r); people.forEach(n=>owner.set(n,top.length));
+  }
+  for(const r of bumped.keys()){ if(top.length>=4) break; top.push(r); bumped.delete(r); }
+  const inTop=new Set(top);
+  return {top4:top,bumped,rest:ranked.filter(r=>!inTop.has(r))};
+}
+function crowdDiffText(r){ return r.crowdDiff==null?'':(r.crowdDiff>=0?'+':'−')+Math.abs(r.crowdDiff).toFixed(1); }
 
 // Titles wrap on words to fit a niche: about 13 capitals a line, three lines at most
 function wrapTitle(t,max,maxLines){
@@ -4982,7 +5011,9 @@ function wrapTitle(t,max,maxLines){
   if(lines.length>maxLines){ lines.length=maxLines; lines[maxLines-1]=svgTrunc(lines[maxLines-1]+'…',max); }
   return lines.map(l=>svgTrunc(l,max+2));
 }
-function filmNiche(r,img){ return {name:r.name,lines:wrapTitle(r.name,13,3),score:r.score,img:img||''}; }
+function filmNiche(r,img){ return {name:r.name,lines:wrapTitle(r.name,13,3),score:r.score,crowdDiff:r.crowdDiff,img:img||''}; }
+// Under each face: how far you sit from the crowd on it, the point of the four
+function filmNicheSub(d){ return d.crowdDiff==null?(d.score*100).toFixed(1):`${(d.crowdDiff>=0?'+':'−')+Math.abs(d.crowdDiff).toFixed(1)} VS CROWD`; }
 function filmsLabel(){ const un=STATE.userName, filt=filterLabel(); return `${un?un+"'s":'Your'}${filt?' '+filt:''} Films Mount Rushmore`; }
 function filmStars(r){ return r>0?'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':''):'unrated'; }
 function filmMeta(r){
@@ -5013,7 +5044,12 @@ function filmCardHTML(r,i,sp){
         <div style="color:#c8a840;font-size:13px;margin-top:4px">${filmStars(r.rating)}${r.rewatchCount?`<span style="color:#b08a60;font-size:11px;margin-left:8px">↻ ${r.rewatchCount}</span>`:''}</div>
       </div>
     </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;padding:7px 10px;background:#0a0a14;border:1px solid #1c1c2c;border-radius:8px" title="Your rating against the TMDB average, on a 5-star scale">
+      <span style="font-size:11px;color:#a0a0b4">You <b style="color:#f0e8d8">★${r.rating>0?r.rating.toFixed(1):'—'}</b> · Crowd <b style="color:#f0e8d8">${r.crowd!=null?'★'+r.crowd.toFixed(1):'—'}</b></span>
+      ${r.crowdDiff!=null?`<span class="mono" style="color:${r.crowdDiff>=0?'#c8a840':'#9fb0d0'};font-size:13px;font-weight:bold">${crowdDiffText(r)}</span>`:`<span style="color:#7d7d94;font-size:10px">no crowd score</span>`}
+    </div>
     ${bar('Rating',r.ratingScore,r.rating>0?'★'+r.rating.toFixed(1):'—')}
+    ${bar('Vs the crowd',r.crowdScore,r.crowdDiff!=null?crowdDiffText(r)+'★':'—')}
     ${bar('Rewatches',r.rewatchScore,r.rewatchCount?r.rewatchCount+'×':'none')}
     ${bar('Favourite people',r.peopleScore,best?`best: #${best.rank} ${best.label.toLowerCase()}`:'none ranked')}
     ${r.why.length?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:10px">${filmWhyChips(r,3)}</div>`:''}
@@ -5024,9 +5060,9 @@ function filmCardHTML(r,i,sp){
   </div>`;
 }
 
-function filmRowHTML(r,i,sp){
+function filmRowHTML(r,i,sp,face){
   return `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #14141f">
-    <span class="mono" style="color:#777787;font-size:11px;width:26px;flex-shrink:0">${i+1}</span>
+    <span class="mono" style="color:${face?RANK_COLORS[face-1]:'#777787'};font-size:11px;width:26px;flex-shrink:0"${face?` title="Face #${face} on your Films Rushmore"`:''}>${face?'⛰':i+1}</span>
     ${posterHTML(r.d&&r.d.poster,r.name,30,sp)}
     <div style="flex:1;min-width:0">
       <div style="color:#f0e8d8;font-size:13px;font-weight:600;line-height:1.3">${esc(r.name)}</div>
@@ -5035,6 +5071,7 @@ function filmRowHTML(r,i,sp){
     </div>
     <div style="text-align:right;flex-shrink:0;line-height:1.4">
       <div style="color:#c8a840;font-size:12px">${filmStars(r.rating)}</div>
+      ${r.crowdDiff!=null?`<div style="color:${r.crowdDiff>=0?'#c8a840aa':'#9fb0d0aa'};font-size:10px" title="Your rating against the TMDB average">${crowdDiffText(r)} vs crowd ★${r.crowd.toFixed(1)}</div>`:''}
       ${r.rewatchCount?`<div style="color:#b08a60;font-size:10px">↻ ${r.rewatchCount} rewatch${r.rewatchCount!==1?'es':''}</div>`:''}
     </div>
     <span class="mono" style="color:#c8a840;font-size:12px;flex-shrink:0;min-width:36px;text-align:right">${(r.score*100).toFixed(1)}</span>
@@ -5053,10 +5090,11 @@ function renderFilmsPanel(){
   el.innerHTML=`<div style="margin-bottom:16px">
       <div class="eyebrow" style="margin-bottom:5px">🎞 Films</div>
       <h1 id="films-title" style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(filmsLabel())}</h1>
-      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:680px">Your favourite films, ranked on how you rated them, how often you went back, and how high their director, writers and leading actors stand on your other Rushmores. Favourite people and rewatches break ties between films you rated alike.</p>
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:680px">Your favourite films, ranked on how you rated them, how far that sits from the crowd's TMDB average, how often you went back, and how high their director, writers and leading actors stand on your other Rushmores. No one appears on two faces: a film sharing a director, writer or lead with a higher face gives way to the next one down.</p>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end;background:#0a0a14;border:1px solid #1a1a2a;border-radius:10px;padding:12px 18px;margin-bottom:18px">
       ${slider('rating','★ Rating','How far above your own average you rated it')}
+      ${slider('crowd','👥 Vs the crowd','How far above the TMDB average you rated it — what makes the list yours rather than the canon')}
       ${slider('rewatches','↻ Rewatches','How often you went back to it, against your most-rewatched film')}
       ${slider('people','🎬 Favourite people','How high its director, writers and actors stand on your Directors, Writers and Actors Rushmores')}
       <button class="btn-ghost btn-sm" onclick="resetFilmWeights()">Reset</button>
@@ -5086,22 +5124,30 @@ function repaintFilms(){
     el.innerHTML=`<div style="text-align:center;padding:60px 0;color:#7d7d94;font-size:14px">No rated films${anyFilter()?' in '+esc(filterLabel()):''} yet.</div>`;
     return;
   }
-  const top4=list.slice(0,4);
-  const sp=anyPoster(list.slice(0,14).map(r=>r.f),filmPosterOf);
-  const alsoHTML=list.slice(4,14).map((r,i)=>`<span class="also-chip" style="cursor:default"><span style="color:#7d7d94;font-size:11px;font-family:'IBM Plex Mono',monospace">#${i+5}</span><span style="color:#b8b0a0;font-size:13px">${esc(r.name)}</span><span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(r.score*100).toFixed(1)}</span></span>`).join('');
+  const pick=pickFilmRushmore(list), top4=pick.top4;
+  STATE._filmFaces=new Map(top4.map((r,i)=>[r,i+1]));
+  const sp=anyPoster(top4.concat(pick.rest.slice(0,10)).map(r=>r.f),filmPosterOf);
+  const alsoHTML=pick.rest.slice(0,10).map(r=>{
+    const b=pick.bumped.get(r);
+    return `<span class="also-chip" style="cursor:default"${b?` title="${esc(`Shares ${b.name} with face #${b.pick}`)}"`:''}><span style="color:#7d7d94;font-size:11px;font-family:'IBM Plex Mono',monospace">#${list.indexOf(r)+1}</span><span style="color:#b8b0a0;font-size:13px">${esc(r.name)}</span>${b?`<span style="color:#8c8ca2;font-size:10px">shares ${esc(b.name)} with #${b.pick}</span>`:''}<span style="color:#c8a84077;font-size:11px;font-family:'IBM Plex Mono',monospace">${(r.score*100).toFixed(1)}</span></span>`;
+  }).join('');
+  // How the four set you apart: their average distance from the crowd
+  const vs=top4.filter(r=>r.crowdDiff!=null), vsAvg=vs.length?vs.reduce((t,r)=>t+r.crowdDiff,0)/vs.length:null;
+  const vsLine=vsAvg==null?'':`Your four sit <b style="color:${vsAvg>=0?'#c8a840':'#9fb0d0'}">${(vsAvg>=0?'+':'−')+Math.abs(vsAvg).toFixed(2)}★</b> ${vsAvg>=0?'above':'below'} the crowd on average${vs.length<top4.length?` (${vs.length} with a crowd score)`:''}`;
   const notes=[];
   if(fr.skipped) notes.push(`${fr.skipped.toLocaleString()} unrated film${fr.skipped!==1?'s':''} left out`);
   if(fr.unrated) notes.push('no star ratings in this library — ranked on rewatches and favourite people only');
   if(!fr.maxRw) notes.push('no rewatches logged — upload diary.csv for the rewatch signal');
   el.innerHTML=`
-    <div id="svg-films">${buildInlineSVG(top4.map(r=>filmNiche(r,posterURL(r.d&&r.d.poster,'w185'))),filmsLabel(),d=>(d.score*100).toFixed(1))}</div>
+    <div id="svg-films">${buildInlineSVG(top4.map(r=>filmNiche(r,posterURL(r.d&&r.d.poster,'w185'))),filmsLabel(),filmNicheSub)}</div>
     <div style="background:#0d0d1c;border:1px solid #1c1c2c;border-top:none;border-radius:0 0 12px 12px;padding:10px 20px;display:flex;gap:20px;flex-wrap:wrap;margin-bottom:22px;font-size:11px">
-      ${FILM_KEYS.map(k=>`<div><span style="color:#a9a9bc">${{rating:'Rating',rewatches:'Rewatches',people:'Favourite people'}[k]}</span><span style="color:#c8a84077;margin-left:5px">${Math.round(FILM_WEIGHTS[k]/(FILM_KEYS.reduce((t,x)=>t+FILM_WEIGHTS[x],0)||1)*100)}%</span></div>`).join('')}
+      ${vsLine?`<div style="color:#c8c0ae;width:100%">${vsLine}</div>`:''}
+      ${FILM_KEYS.map(k=>`<div><span style="color:#a9a9bc">${{rating:'Rating',crowd:'Vs the crowd',rewatches:'Rewatches',people:'Favourite people'}[k]}</span><span style="color:#c8a84077;margin-left:5px">${Math.round((FILM_WEIGHTS[k]||0)/(FILM_KEYS.reduce((t,x)=>t+(FILM_WEIGHTS[x]||0),0)||1)*100)}%</span></div>`).join('')}
       ${notes.length?`<div style="color:#7d7d94">${notes.map(esc).join(' · ')}</div>`:''}
     </div>
     <div class="ornament-rule">◆</div>
     <div class="top4-grid" style="margin-bottom:32px">${top4.map((r,i)=>filmCardHTML(r,i,sp)).join('')}</div>
-    ${list.length>4?`<div class="ornament-rule">◆</div><div style="margin-bottom:32px"><div class="eyebrow" style="margin-bottom:12px">Also Considered</div><div style="display:flex;flex-wrap:wrap;gap:10px">${alsoHTML}</div></div>`:''}
+    ${pick.rest.length?`<div class="ornament-rule">◆</div><div style="margin-bottom:32px"><div class="eyebrow" style="margin-bottom:12px">Also Considered</div><div style="display:flex;flex-wrap:wrap;gap:10px">${alsoHTML}</div></div>`:''}
     <div class="filmstrip-rule"></div>
     <div style="margin-bottom:12px">
       <div class="eyebrow" style="margin-bottom:8px">All Films (${list.length.toLocaleString()})</div>
@@ -5119,7 +5165,7 @@ function repaintFilmList(){
   const shown=STATE._filmsShowAll||q?hits:hits.slice(0,FILM_SHOWN);
   const sp=anyPoster(shown.slice(0,40).map(x=>x.r.f),filmPosterOf);
   el.innerHTML=hits.length
-    ?shown.map(({r,i})=>filmRowHTML(r,i,sp)).join('')+(shown.length<hits.length?`<div style="text-align:center;margin-top:14px"><button class="btn-ghost btn-sm" onclick="showAllFilms()">Show all ${hits.length.toLocaleString()}</button></div>`:'')
+    ?shown.map(({r,i})=>filmRowHTML(r,i,sp,STATE._filmFaces&&STATE._filmFaces.get(r))).join('')+(shown.length<hits.length?`<div style="text-align:center;margin-top:14px"><button class="btn-ghost btn-sm" onclick="showAllFilms()">Show all ${hits.length.toLocaleString()}</button></div>`:'')
     :`<div style="text-align:center;color:#7d7d94;padding:40px 0;font-size:14px">No films match your search.</div>`;
 }
 
@@ -5137,9 +5183,10 @@ function svgFilmCards(top4,MTN_H,CARD_H){
     s+=`<text x="${x}" y="${y0+82}" fill="#9595aa" font-size="10" font-family="Georgia,serif">${esc(svgTrunc([Number.isFinite(r.year)?r.year:'',dirsLabel(dirs)].filter(Boolean).join(' · '),28))}</text>`;
     s+=`<text x="${x}" y="${y0+106}" fill="${cc}" font-size="15" font-family="Georgia,serif">${esc(svgStarsText(r.rating))}</text>`;
     if(r.rewatchCount) s+=`<text x="${right}" y="${y0+105}" text-anchor="end" fill="#b08a60" font-size="10" font-family="Georgia,serif">${r.rewatchCount} rewatch${r.rewatchCount!==1?'es':''}</text>`;
-    s+=`<text x="${x}" y="${y0+132}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">WHY IT'S HERE</text>`;
-    r.why.slice(0,3).forEach((w,wi)=>{ s+=`<text x="${x}" y="${y0+150+wi*18}" fill="#c8c0ae" font-size="10" font-family="Georgia,serif">${esc(svgTrunc(w.name,18))}</text><text x="${right}" y="${y0+150+wi*18}" text-anchor="end" fill="${cc}" font-size="9" font-family="Georgia,serif">#${w.rank} ${w.label.toLowerCase()}</text>`; });
-    if(!r.why.length) s+=`<text x="${x}" y="${y0+150}" fill="#7d7d94" font-size="10" font-family="Georgia,serif">${r.rating>0?'The rating alone':'—'}</text>`;
+    s+=r.crowdDiff!=null?`<text x="${x}" y="${y0+124}" fill="#9595aa" font-size="10" font-family="Georgia,serif">Crowd ★${r.crowd.toFixed(1)}</text><text x="${right}" y="${y0+124}" text-anchor="end" fill="${r.crowdDiff>=0?cc:'#9fb0d0'}" font-size="12" font-family="Georgia,serif" font-weight="bold">${crowdDiffText(r)}</text>`:'';
+    s+=`<text x="${x}" y="${y0+146}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="1.5">WHY IT'S HERE</text>`;
+    r.why.slice(0,3).forEach((w,wi)=>{ s+=`<text x="${x}" y="${y0+163+wi*17}" fill="#c8c0ae" font-size="10" font-family="Georgia,serif">${esc(svgTrunc(w.name,18))}</text><text x="${right}" y="${y0+163+wi*17}" text-anchor="end" fill="${cc}" font-size="9" font-family="Georgia,serif">#${w.rank} ${w.label.toLowerCase()}</text>`; });
+    if(!r.why.length) s+=`<text x="${x}" y="${y0+163}" fill="#7d7d94" font-size="10" font-family="Georgia,serif">${r.rating>0?'The rating alone':'—'}</text>`;
     s+=`<line x1="${x}" y1="${y0+CARD_H-42}" x2="${right}" y2="${y0+CARD_H-42}" stroke="${cc}22" stroke-width="1"/><text x="${x}" y="${y0+CARD_H-23}" fill="#8c8ca2" font-size="8" font-family="Georgia,serif" letter-spacing="2">SCORE</text><text x="${right}" y="${y0+CARD_H-18}" text-anchor="end" fill="${cc}" font-size="22" font-family="Georgia,serif" font-weight="bold">${(r.score*100).toFixed(1)}</text>`;
   });
   return s;
@@ -5147,10 +5194,10 @@ function svgFilmCards(top4,MTN_H,CARD_H){
 function buildFilmsExportSVG(top4,label,posters){
   posters=posters||[];
   const W=820,MTN_H=440,CARD_H=270,H=MTN_H+CARD_H;
-  return `<?xml version="1.0" encoding="UTF-8"?><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${svgDefs()}<rect width="${W}" height="${MTN_H}" fill="url(#rSky)"/>${svgStars()}${svgMountain(MTN_H)}${svgNiches(top4.map((r,i)=>filmNiche(r,posters[i])))}<text x="410" y="${MTN_H-14}" text-anchor="middle" fill="#c8a84050" font-size="10" font-family="Georgia,serif" letter-spacing="5">${esc(label.toUpperCase())}</text>${svgFilmCards(top4,MTN_H,CARD_H)}</svg>`;
+  return `<?xml version="1.0" encoding="UTF-8"?><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${svgDefs()}<rect width="${W}" height="${MTN_H}" fill="url(#rSky)"/>${svgStars()}${svgMountain(MTN_H)}${svgNiches(top4.map((r,i)=>filmNiche(r,posters[i])),filmNicheSub)}<text x="410" y="${MTN_H-14}" text-anchor="middle" fill="#c8a84050" font-size="10" font-family="Georgia,serif" letter-spacing="5">${esc(label.toUpperCase())}</text>${svgFilmCards(top4,MTN_H,CARD_H)}</svg>`;
 }
 async function downloadFilmsPNG(){
-  const top4=rankFilms().ranked.slice(0,4);
+  const top4=pickFilmRushmore(rankFilms().ranked).top4;
   if(!top4.length){ showToast('No rated films yet'); return; }
   showToast('Preparing the image…');
   const posters=await Promise.all(top4.map(r=>posterDataURL(r.d&&r.d.poster)));
