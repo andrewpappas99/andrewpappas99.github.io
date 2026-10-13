@@ -1094,6 +1094,28 @@ function lookupFilmsInDB(films){
   return {filmData,misses,recent,loose,todo:misses.concat(recent,loose)};
 }
 
+// A saved session keeps the films it couldn't match, and nothing used to look at
+// them again — so a film added by a later weekly rebuild of the database stayed
+// "not matched" for good in a library that only ever tops up from the diary feed.
+// Re-check them against the database this visit loaded, tail included.
+async function rematchMisses(){
+  const runId=STATE.runId;
+  if(!(STATE._missList||[]).length||!STATE._filmData||!STATE._films) return 0;
+  if(!_tailDone) await loadDBTail();
+  if(STATE.runId!==runId||!STATE._filmData) return 0;
+  const {filmData}=lookupFilmsInDB(STATE._missList);
+  const n=Object.keys(filmData).length;
+  if(!n) return 0;
+  Object.assign(STATE._filmData,filmData);
+  STATE._missList=STATE._missList.filter(f=>!STATE._filmData[f.name+'||'+f.year]);
+  STATE._dbMisses=STATE._missList.length;
+  const y=window.scrollY;
+  rescoreFromState(); invalidateCoverage(); renderResults();   // renderResults persists
+  window.scrollTo(0,y);
+  showToast(`${n} more film${n!==1?'s':''} matched by the updated film database`);
+  return n;
+}
+
 // Phase 2 runs after the results are already on screen (see runBackgroundLookups),
 // so this is only used by callers that need everything in one go.
 async function fetchCrewHybrid(films, apiKey, onProg, signal){
@@ -1403,6 +1425,7 @@ async function handleFileInput(files){
         applySavedData(JSON.parse(t));
         renderResults(); showPage('page-results');
         syncLetterboxd();
+        rematchMisses();
         if(wlFiles.length) importWatchlistFiles(wlFiles);   // a fresh CSV beats the saved copy
       }catch(e){showError('Could not load cache: '+e.message);}
     }); return;
@@ -1740,6 +1763,7 @@ async function resumeSession(){
     applySavedData(JSON.parse(rec.payload));
     renderResults(); showPage('page-results');
     syncLetterboxd();   // anything logged since this was saved
+    rematchMisses();
   }catch(e){
     console.warn('Saved session unreadable',e);
     showToast('That saved session could not be opened');
@@ -4752,7 +4776,8 @@ function renderDataBanners(){
 // advice is only given when a key would actually help.
 const SERIES_HINT=/\b(season|series|episode|miniseries|limited series)\b/i;
 const KNOWN_SERIES=new Set(['chernobyl','squid game','loki','wandavision','the queen s gambit','queen s gambit','adolescence','the bear','bear','severance','the last of us','last of us','succession','breaking bad','the sopranos','sopranos','the wire','wire','mad men','true detective','stranger things','the office','office','fleabag','sherlock','the crown','crown','black mirror','mr robot','the boys','boys','andor','the mandalorian','mandalorian','shogun','shōgun','baby reindeer','beef','the white lotus','white lotus','euphoria','ted lasso','game of thrones','house of the dragon','arcane','dark','fargo','twin peaks','band of brothers','the pacific','pacific','normal people','the night of','night of','watchmen','ozark','narcos','peaky blinders','mindhunter','the leftovers','leftovers','bojack horseman','the penguin','penguin','fallout','one piece','invincible','the studio','studio','paradise','the pitt','pitt','daredevil born again','presumed innocent','disclaimer','say nothing','black doves','dope thief','the rehearsal','rehearsal','common side effects','mo','ripley','shrinking','slow horses','silo','the diplomat','diplomat','bad sisters','pachinko','the morning show','morning show','yellowjackets','the righteous gemstones','righteous gemstones','curb your enthusiasm','barry','atlanta','reservation dogs','what we do in the shadows','only murders in the building','abbott elementary','the great','great','hacks','poker face','the afterparty','afterparty','veep']);
-function looksLikeSeries(f){ return SERIES_HINT.test(f.name)||KNOWN_SERIES.has(normTitle(f.name)); }
+const SERIES_TITLE=/^(dahmer )?monsters? the .+ story$/;   // Netflix's Monster anthology: "DAHMER - Monster: The Jeffrey Dahmer Story"
+function looksLikeSeries(f){ const t=normTitle(f.name); return SERIES_HINT.test(f.name)||KNOWN_SERIES.has(t)||SERIES_TITLE.test(t); }
 function missListHTML(){
   const list=STATE._missList||[];
   const head=`${STATE._matchedFilms} / ${STATE._totalFilms} films matched`;
