@@ -1893,11 +1893,10 @@ const feedTitle=n=>normTitle(String(n).replace(/['’‘`]/g,''));
 // Which feed entries are new to this diary, and whether the feed reaches back far
 // enough to trust. Matched on date, title and year, with the title normalised so
 // a punctuation change on Letterboxd's side doesn't read as a second viewing.
-// `items` is the feed's own item count from the relay. The feed is capped at
-// LB_FEED_MAX items, list updates included, and the relay returns only the diary
-// entries — so 45 entries can still be a full feed. A relay too old to send the
-// count falls back on the entries.
-function planFeedMerge(entries,diary,items){
+// The feed holds the LB_FEED_MAX most recent diary entries, with any list updates
+// on top of those (checked 2026-10-13: 63 items, 50 of them diary entries), so the
+// diary entries alone say whether it is full.
+function planFeedMerge(entries,diary){
   const key=(date,name,year)=>date+'|'+feedTitle(name)+'|'+year;
   const known=new Set((diary||[]).map(r=>key(r.date,r.name,r.year)));
   const valid=(Array.isArray(entries)?entries:[]).filter(e=>e&&typeof e.title==='string'&&e.title.trim()
@@ -1914,8 +1913,7 @@ function planFeedMerge(entries,diary,items){
       rating:r>0&&r<=5?r:0,rewatch:!!e.rewatch});
   }
   // A full feed sharing nothing with what's stored may have more behind it
-  const full=(Number.isFinite(items)?items:valid.length)>=LB_FEED_MAX;
-  const gap=!overlap&&full;
+  const gap=!overlap&&valid.length>=LB_FEED_MAX;
   fresh.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
   return {added:gap?[]:fresh,gap};
 }
@@ -1969,7 +1967,7 @@ async function syncLetterboxd(opts){
     showToast('Couldn’t reach Letterboxd — showing your saved data');
     return;
   }
-  const plan=planFeedMerge(body.entries,STATE._diary,body.items);
+  const plan=planFeedMerge(body.entries,STATE._diary);
   STATE.lbSyncedAt=Date.now();
   if(plan.gap){ STATE._lbSync={state:'gap'}; renderLbSync(); schedulePersist(); return; }
   if(!plan.added.length){
