@@ -286,6 +286,10 @@ body.no-posters .poster{display:none}
               <label class="slider-label" for="sl-topActors">Actors counted per film <span id="lbl-topActors" class="slider-val">5</span></label>
               <input type="range" min="1" max="10" value="5" id="sl-topActors" class="wslider" oninput="onSettingSlider('topActors',this.value)"/>
             </div>
+            <label class="slider-group" style="min-width:160px;display:flex;align-items:center;gap:6px;color:#a9a9bc;font-size:11px;cursor:pointer" title="Score writers only on scripts they wrote for someone else to direct, so screenwriters aren't buried under writer-directors' own films">
+              <input type="checkbox" id="cb-writersSkipDirected" onchange="onWritersSkipDirected(this.checked)" style="accent-color:#c8a840;cursor:pointer"/>
+              Writers: skip films they directed
+            </label>
           </div>
           <!-- What counts as a "feature" for filmography coverage: rarely changed, so folded away -->
           <details style="border-left:1px solid #1e1e2e;padding-left:24px;margin-top:2px">
@@ -356,6 +360,9 @@ const TMDB_CONCURRENCY = 4;
 // Herzog or Morris, hence the toggle).
 const FEATURE_MIN_RUNTIME = 40;      // default minutes; MIN_RUNTIME is the live value
 let MIN_RUNTIME = FEATURE_MIN_RUNTIME, COUNT_DOCS = false;
+// Writers tab: leave out films the writer also directed, so it ranks screenwriting
+// for other directors rather than repeating the Directors tab
+let WRITERS_SKIP_DIRECTED = false;
 // v5 stores [title, year, runtime, voteAvg, genres] and derives the match key from
 // the title, so changing normalization can never desync from cached records.
 const FILMOG_CACHE_KEY = 'cmr_filmog_v5';
@@ -1293,7 +1300,8 @@ function buildPersonMaps(films, filmData){
     const addTo=(map,person,w)=>{ if(!map[person])map[person]=[]; map[person].push(w<1?Object.assign({},fe,{bw:w}):fe); };
     // A co-directed film counts in full for each of its directors
     dirsOf(d).forEach(n=>addTo(byDir,n));
-    (d.writers||[]).forEach(w=>addTo(byWriter,w));
+    const dirs=WRITERS_SKIP_DIRECTED?dirsOf(d):null;
+    (d.writers||[]).forEach(w=>{ if(!dirs||!dirs.includes(w)) addTo(byWriter,w); });
     (d.actors||[]).slice(0,TOP_ACTORS).forEach((a,i)=>addTo(byActor,a,billingWeight(i)));
     (d.genres||[]).forEach(g=>{ genreCount[g]=(genreCount[g]||0)+1; });
   }
@@ -1368,6 +1376,7 @@ function applySavedData(d){
   if(Number.isInteger(d.topActors)&&d.topActors>=1&&d.topActors<=10){ TOP_ACTORS=d.topActors; const el=document.getElementById('sl-topActors'); if(el){el.value=TOP_ACTORS;document.getElementById('lbl-topActors').textContent=TOP_ACTORS;} }
   if(typeof d.minRuntime==='number'&&d.minRuntime>=20&&d.minRuntime<=90){ MIN_RUNTIME=d.minRuntime; const el=document.getElementById('sl-minRuntime'); if(el){el.value=MIN_RUNTIME;document.getElementById('lbl-minRuntime').textContent=MIN_RUNTIME+' min';} }
   if(typeof d.countDocs==='boolean'){ COUNT_DOCS=d.countDocs; const el=document.getElementById('cb-countDocs'); if(el) el.checked=COUNT_DOCS; }
+  WRITERS_SKIP_DIRECTED=d.writersSkipDirected===true; { const el=document.getElementById('cb-writersSkipDirected'); if(el) el.checked=WRITERS_SKIP_DIRECTED; }
   if(d.weights&&typeof d.weights==='object') setWeightsUI(d.weights);   // before scoring, which reads them
   STATE.hiddenPeople=sanitizeHiddenPeople(d.hiddenPeople);
   STATE._favorites=sanitizeFilmKeys(d.favorites,4); STATE._liked=sanitizeFilmKeys(d.liked,20000);
@@ -1842,6 +1851,7 @@ function resetSettings(){
   set('sl-minFilms',3); txt('lbl-minFilms','3'); set('sl-topActors',5); txt('lbl-topActors','5');
   set('sl-minRuntime',MIN_RUNTIME); txt('lbl-minRuntime',MIN_RUNTIME+' min');
   const cb=document.getElementById('cb-countDocs'); if(cb) cb.checked=false;
+  WRITERS_SKIP_DIRECTED=false; const cw=document.getElementById('cb-writersSkipDirected'); if(cw) cw.checked=false;
   setWeightsUI(WEIGHTS_DEFAULT);
   WL_WEIGHTS=Object.assign({},WL_WEIGHTS_DEFAULT);
   FILM_WEIGHTS=Object.assign({},FILM_WEIGHTS_DEFAULT);
@@ -2185,6 +2195,7 @@ function buildSavePayload(){
     topActors:TOP_ACTORS,
     minRuntime:MIN_RUNTIME,
     countDocs:COUNT_DOCS,
+    writersSkipDirected:WRITERS_SKIP_DIRECTED,
     // Exact TMDB filmographies — expensive to fetch, so carry them along
     filmog:STATE._filmog||{},
     directors:STATE.directors,
@@ -3044,6 +3055,7 @@ function renderCategoryPanel(cat){
       <div style="font-size:11px"><span style="color:#a9a9bc">Peak</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.peak*100)}%</span></div>
       <div style="font-size:11px"><span style="color:#a9a9bc">Rewatches</span><span style="color:#c8a84077;margin-left:5px">${Math.round(WEIGHTS.rewatches*100)}%</span></div>
       <div style="font-size:11px"><span style="color:#a9a9bc">Min rated films</span><span style="color:#c8a84077;margin-left:5px">${MIN_FILMS}</span></div>
+      ${cat==='writers'&&WRITERS_SKIP_DIRECTED?`<div style="font-size:11px;color:#c8a840" title="Change under ⚖ Settings">Skipping films they directed</div>`:''}
       ${cat==='directors'?`<div style="flex:1"></div>
       <button onclick="refineTopCoverage()" title="Fetch each director's full feature filmography from TMDB for exact coverage" style="background:none;border:1px solid #252535;border-radius:6px;padding:3px 10px;color:#a9a9bc;font-family:inherit;font-size:11px;cursor:pointer">⟳ Exact filmography</button>`:''}
     </div>
@@ -3082,7 +3094,7 @@ function renderCategoryPanel(cat){
 // community score and two years on the shelf before it counts as one of the
 // famous ones. (Sorting on the score alone was worse: with no vote counts, an
 // obscure film with three ten-star votes tops every list.)
-const BLIND_TOP=40, BLIND_SHOWN=4, BLIND_FROM_YEAR=1920, BLIND_OLD_CUTOFF=1960, BLIND_MIN_VOTE=3.25, BLIND_SETTLE_YEARS=2, BLIND_SKIP_GENRES=new Set(['TV Movie','Documentary']);
+const BLIND_TOP=40, BLIND_SHOWN=6, BLIND_FROM_YEAR=1920, BLIND_OLD_CUTOFF=1960, BLIND_MIN_VOTE=3.25, BLIND_SETTLE_YEARS=2, BLIND_SKIP_GENRES=new Set(['TV Movie','Documentary']);
 let BLIND_MIN=20;   // a bucket needs this many films before a percentage means anything
 let _blindIdx=null;
 function blindIndex(){
@@ -6749,6 +6761,11 @@ function refreshAllCoverage(){
 }
 
 function onCountDocs(on){ COUNT_DOCS=!!on; refreshAllCoverage(); }
+function onWritersSkipDirected(on){
+  WRITERS_SKIP_DIRECTED=!!on;
+  if(STATE._byDir&&!STATE._filmData){ showToast('Re-export your data to use this setting'); return; }
+  if(STATE._byDir) reScoreAndRender();
+}
 
 function onSettingSlider(key, val){
   const v=parseInt(val);
