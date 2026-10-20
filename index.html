@@ -287,9 +287,10 @@ body.no-posters .poster{display:none}
               <input type="range" min="1" max="10" value="5" id="sl-topActors" class="wslider" oninput="onSettingSlider('topActors',this.value)"/>
             </div>
           </div>
-          <!-- What counts as a "feature" for filmography coverage -->
-          <div style="display:flex;gap:20px;flex-wrap:wrap;border-left:1px solid #1e1e2e;padding-left:24px;margin-top:2px">
-            <div class="slider-group" style="min-width:170px">
+          <!-- What counts as a "feature" for filmography coverage: rarely changed, so folded away -->
+          <details style="border-left:1px solid #1e1e2e;padding-left:24px;margin-top:2px">
+            <summary style="cursor:pointer;color:#9595aa;font-size:11px;padding-top:16px">Advanced</summary>
+            <div class="slider-group" style="min-width:170px;margin-top:10px" title="What counts as a feature when measuring how much of a director's filmography you've seen">
               <label class="slider-label" for="sl-minRuntime">Feature length <span id="lbl-minRuntime" class="slider-val">40 min</span></label>
               <input type="range" min="20" max="90" step="5" value="40" id="sl-minRuntime" class="wslider" oninput="onSettingSlider('minRuntime',this.value)"/>
               <label style="display:flex;align-items:center;gap:6px;color:#a9a9bc;font-size:11px;cursor:pointer;margin-top:7px">
@@ -297,11 +298,7 @@ body.no-posters .poster{display:none}
                 Count documentaries
               </label>
             </div>
-            <div class="slider-group" style="min-width:170px" title="Points added to a director's score once you've seen every feature in their exact TMDB filmography">
-              <label class="slider-label" for="sl-completionBonus">100% filmography bonus <span id="lbl-completionBonus" class="slider-val">+3 pts</span></label>
-              <input type="range" min="0" max="10" step="1" value="3" id="sl-completionBonus" class="wslider" oninput="onSettingSlider('completionBonus',this.value)"/>
-            </div>
-          </div>
+          </details>
         </div>
       </div>
     </div>
@@ -365,8 +362,6 @@ const FILMOG_CACHE_KEY = 'cmr_filmog_v5';
 // Points (on the 0-100 card scale) added to a director whose feature filmography
 // you've fully seen. Flat rather than proportional, so it breaks near-ties without
 // lifting a mid-table director past someone you clearly rate higher.
-const COMPLETION_BONUS_DEFAULT = 3;
-let COMPLETION_BONUS = COMPLETION_BONUS_DEFAULT;
 
 // ─── Watchlist ranking ────────────────────────────────────────────────────────
 // A watchlist film is scored on how its people and genres have landed with you
@@ -404,7 +399,6 @@ const WL_MAX_FILMS = 3000;   // Letterboxd watchlists can be long; beyond this i
 //   acclaim    — the film's own standing (TMDB popularity rank + rating)
 const REC_MODES = {
   balanced:      {label:'Balanced',      icon:'🎯', hint:'A bit of everything',            affinity:.40, completion:.30, acclaim:.30, invert:false, mix:true},
-  completionist: {label:'Completionist', icon:'🏁', hint:'Finish what you started',        affinity:.20, completion:.65, acclaim:.15, invert:false, mix:false},
   essentials:    {label:'Essentials',    icon:'⭐', hint:'The famous ones you have missed', affinity:.30, completion:.10, acclaim:.60, invert:false, mix:true},
   deepcuts:      {label:'Deep Cuts',     icon:'🔦', hint:'Obscure films by people you love', affinity:.50, completion:.15, acclaim:.35, invert:true, mix:true}
 };
@@ -662,7 +656,12 @@ const STATE = { userName:'', selectedFiles:[], currentCat:'directors',
   recSource:'directors', _watchlist:null, _wlAbort:null, _wlRun:0, _wlShowAll:false,
   wlMaxRuntime:0, _lastPick:null, recPeople:true, wlStreamOnly:false,
   _ownedShowAll:false, _ownedPending:0,
-  lbUser:'', lbSyncedAt:0, _lbSync:null };
+  lbUser:'', lbSyncedAt:0, _lbSync:null,
+  // People taken off one tab's Rushmore by hand: {directors:[names], writers:…, actors:…}
+  hiddenPeople:{directors:[],writers:[],actors:[]},
+  // From the export: your four profile favourites, in order, and every film you
+  // gave a heart — both "Name||Year" keys. They break ties on the Films tab.
+  _favorites:[], _liked:[] };
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 function showPage(id){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
@@ -1217,12 +1216,18 @@ function sanitizeMissList(raw){
 //             Not discounted for small samples on purpose: three five-star
 //             films is exactly the case it exists for. With fewer than three
 //             rated films the empty slots take your average.
-//   rewatches share of the most-rewatched qualifier
+//   rewatches rewatches per film, on a log curve: one rewatch per film on
+//             average fills the bar. It used to be a share of the most-rewatched
+//             qualifier, so one outlier pushed everyone else to near zero.
+// Actors are counted by billing for volume: a lead counts in full, each place
+// down the cast list an eighth less, and fifth-billed and below count half —
+// so a run of cameos no longer outweighs a run of leading roles.
 // The two comparisons are shrunk by n/(n+3) so a three-film sample counts half,
 // and a full star fills the bar, so a typical half-star gap actually moves the
 // score. Volume keeps most of the weight on purpose: the people who define a
 // taste are the ones seen often and rated well, not a three-film flash.
-const VOLUME_CAP=16, SHRINK_FILMS=3;
+const VOLUME_CAP=16, SHRINK_FILMS=3, BILLING_STEP=0.125, BILLING_FLOOR=0.5;
+function billingWeight(i){ return Math.max(BILLING_FLOOR,1-BILLING_STEP*i); }
 function computeScores(byPerson, globalMean, minFilms){
   const gMean = globalMean ?? 3.5;
   const minN = minFilms||MIN_FILMS;
@@ -1234,14 +1239,15 @@ function computeScores(byPerson, globalMean, minFilms){
   const qualified=Object.entries(byPerson).filter(([,f])=>countOf(f)>=minN);
   if(!qualified.length) return [];
   const clamp01=x=>Math.max(0,Math.min(1,x));
+  // bw is the billing weight buildPersonMaps puts on actor credits; others count 1
+  const bw=x=>x.bw||1;
   const volumeOf=films=>{
-    const r=films.filter(x=>x.rating>0);
-    const avg=unrated?1:r.length?r.reduce((s,x)=>s+x.rating,0)/r.length:0;
-    return Math.log2(Math.min(films.length,VOLUME_CAP)+1)*avg;
+    const r=films.filter(x=>x.rating>0), rw=r.reduce((s,x)=>s+bw(x),0);
+    const avg=unrated?1:rw?r.reduce((s,x)=>s+bw(x)*x.rating,0)/rw:0;
+    return Math.log2(Math.min(films.reduce((s,x)=>s+bw(x),0),VOLUME_CAP)+1)*avg;
   };
   // reduce rather than Math.max(...spread): the actors map on a large library can
   // hold thousands of qualifiers, and a spread that wide risks the argument limit.
-  const maxRw=qualified.reduce((m,[,f])=>Math.max(m,f.reduce((s,x)=>s+x.rewatchCount,0)),1);
   const maxVolume=qualified.reduce((m,[,f])=>Math.max(m,volumeOf(f)),1e-9);
   const wSum=WEIGHT_KEYS.reduce((t,k)=>t+WEIGHTS[k],0)||1;
   return qualified.map(([name,films])=>{
@@ -1263,9 +1269,10 @@ function computeScores(byPerson, globalMean, minFilms){
     const top3Avg=topFilms.length?top3Sum/topFilms.length:0;
     const top3Pad=(top3Sum+(3-topFilms.length)*gMean)/3;
     const peakScore=unrated?0.5:clamp01((top3Pad-gMean)/Math.max(5-gMean,0.5));
-    const score=(WEIGHTS.volume*volumeScore+WEIGHTS.crowd*crowdScore+WEIGHTS.lift*liftScore+WEIGHTS.peak*peakScore+WEIGHTS.rewatches*(rewatchCount/maxRw))/wSum;
+    const rewatchScore=clamp01(Math.log2(1+rewatchCount/filmCount))*filmCount/(filmCount+SHRINK_FILMS);
+    const score=(WEIGHTS.volume*volumeScore+WEIGHTS.crowd*crowdScore+WEIGHTS.lift*liftScore+WEIGHTS.peak*peakScore+WEIGHTS.rewatches*rewatchScore)/wSum;
     return{name,films,filmCount,ratedCount,rewatchCount,avgRating,top3Avg,score,topFilms,
-      logVQNorm:volumeScore,crowdScore,affinityDelta:delta,hasCommunity,lift,liftScore,peakScore};
+      logVQNorm:volumeScore,crowdScore,affinityDelta:delta,hasCommunity,lift,liftScore,peakScore,rewatchScore};
   }).sort(byScoreThenMerit);
 }
 
@@ -1283,11 +1290,11 @@ function buildPersonMaps(films, filmData){
     // Attach the community rating to a copy. Mutating the caller's film objects made
     // the call order load-bearing and leaked voteAvg into the exported films array.
     const fe=d.voteAvg!=null?Object.assign({},f,{voteAvg:d.voteAvg}):f;
-    const addTo=(map,person)=>{ if(!map[person])map[person]=[]; map[person].push(fe); };
+    const addTo=(map,person,w)=>{ if(!map[person])map[person]=[]; map[person].push(w<1?Object.assign({},fe,{bw:w}):fe); };
     // A co-directed film counts in full for each of its directors
     dirsOf(d).forEach(n=>addTo(byDir,n));
     (d.writers||[]).forEach(w=>addTo(byWriter,w));
-    (d.actors||[]).slice(0,TOP_ACTORS).forEach(a=>addTo(byActor,a));
+    (d.actors||[]).slice(0,TOP_ACTORS).forEach((a,i)=>addTo(byActor,a,billingWeight(i)));
     (d.genres||[]).forEach(g=>{ genreCount[g]=(genreCount[g]||0)+1; });
   }
   const genres=Object.entries(genreCount).sort((a,b)=>b[1]-a[1]).map(([g,n])=>({genre:g,count:n}));
@@ -1361,8 +1368,9 @@ function applySavedData(d){
   if(Number.isInteger(d.topActors)&&d.topActors>=1&&d.topActors<=10){ TOP_ACTORS=d.topActors; const el=document.getElementById('sl-topActors'); if(el){el.value=TOP_ACTORS;document.getElementById('lbl-topActors').textContent=TOP_ACTORS;} }
   if(typeof d.minRuntime==='number'&&d.minRuntime>=20&&d.minRuntime<=90){ MIN_RUNTIME=d.minRuntime; const el=document.getElementById('sl-minRuntime'); if(el){el.value=MIN_RUNTIME;document.getElementById('lbl-minRuntime').textContent=MIN_RUNTIME+' min';} }
   if(typeof d.countDocs==='boolean'){ COUNT_DOCS=d.countDocs; const el=document.getElementById('cb-countDocs'); if(el) el.checked=COUNT_DOCS; }
-  if(typeof d.completionBonus==='number'&&d.completionBonus>=0&&d.completionBonus<=10) setCompletionBonusUI(d.completionBonus);
   if(d.weights&&typeof d.weights==='object') setWeightsUI(d.weights);   // before scoring, which reads them
+  STATE.hiddenPeople=sanitizeHiddenPeople(d.hiddenPeople);
+  STATE._favorites=sanitizeFilmKeys(d.favorites,4); STATE._liked=sanitizeFilmKeys(d.liked,20000);
   STATE._totalFilms=Number.isFinite(d.totalFilms)?d.totalFilms:0;
   STATE._matchedFilms=Number.isFinite(d.matchedFilms)?d.matchedFilms:0;
   STATE._missList=sanitizeMissList(d.missList);
@@ -1390,9 +1398,9 @@ function applySavedData(d){
     STATE.writers=people(d.writers);
     STATE.actors=people(d.actors);
     rebuildMapsFromScored();
-    STATE.directors=scoreDirectors(STATE._byDir,STATE._globalMean);
-    STATE.writers=computeScores(STATE._byWriter,STATE._globalMean,qualifyMin());
-    STATE.actors=computeScores(STATE._byActor,STATE._globalMean,qualifyMin());
+    STATE.directors=shownPeople('directors',scoreDirectors(STATE._byDir,STATE._globalMean));
+    STATE.writers=shownPeople('writers',computeScores(STATE._byWriter,STATE._globalMean,qualifyMin()));
+    STATE.actors=shownPeople('actors',computeScores(STATE._byActor,STATE._globalMean,qualifyMin()));
   }
   clearWatchlist();
   const savedWl=sanitizeWatchlist(d.watchlist);
@@ -1403,7 +1411,7 @@ function applySavedData(d){
   if(d.filmWeights&&typeof d.filmWeights==='object')
     FILM_KEYS.forEach(k=>{ const v=Number(d.filmWeights[k]); if(Number.isFinite(v)&&v>=0&&v<=100) FILM_WEIGHTS[k]=v; });
   if(d.recMode&&REC_MODES[d.recMode]) STATE.recMode=d.recMode;
-  if(d.recSource==='directors'||d.recSource==='watchlist'||d.recSource==='owned') STATE.recSource=d.recSource;
+  if(REC_SOURCES.includes(d.recSource)) STATE.recSource=d.recSource;
   mergeOwned(d.owned);
   mergeHidden(d.hidden);
   // Saves from before the presets moved carry 90/120/150
@@ -1421,8 +1429,10 @@ const hasExt=(f,ext)=>String(f&&f.name||'').toLowerCase().endsWith(ext);
 // flow. Zip entries are deflate-raw, which DecompressionStream already speaks,
 // so the container is read here without a library: find the central directory
 // at the end of the file, walk its entries, inflate each one. Only the film
-// logs at the root are returned — lists/ and likes/ hold lists, not viewings.
-const ZIP_MAX_ENTRY=60*1024*1024;
+// logs at the root are returned — lists/ and likes/ hold lists, not viewings —
+// plus likes/films.csv, renamed so it can't pass for watched.csv (same columns).
+const ZIP_MAX_ENTRY=60*1024*1024, LIKES_PATH_RE=/^likes\/films\.csv$/i, LIKES_FILE='likes-films.csv';
+function isLikesFile(f){ return String(f&&f.name||'').toLowerCase()===LIKES_FILE; }
 async function readZipFiles(buf){
   const u8=new Uint8Array(buf), dv=new DataView(buf);
   let eocd=-1;
@@ -1437,7 +1447,9 @@ async function readZipFiles(buf){
     const nlen=dv.getUint16(p+28,true), elen=dv.getUint16(p+30,true), clen=dv.getUint16(p+32,true), lho=dv.getUint32(p+42,true);
     const name=td.decode(u8.subarray(p+46,p+46+nlen));
     p+=46+nlen+elen+clen;
-    if(name.endsWith('/')||name.includes('/')||name.startsWith('__MACOSX')||!/\.(csv|json)$/i.test(name)) continue;
+    // likes/films.csv is the one list kept: your hearts break ties on the Films tab
+    const liked=LIKES_PATH_RE.test(name);
+    if(!liked&&(name.endsWith('/')||name.includes('/')||name.startsWith('__MACOSX')||!/\.(csv|json)$/i.test(name))) continue;
     if(usize>ZIP_MAX_ENTRY||lho+30>u8.length) continue;
     const lnlen=dv.getUint16(lho+26,true), lelen=dv.getUint16(lho+28,true);
     const start=lho+30+lnlen+lelen, data=u8.subarray(start,start+csize);
@@ -1445,7 +1457,7 @@ async function readZipFiles(buf){
     if(method===0) bytes=data;
     else if(method===8) bytes=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
     else continue;   // encrypted or an exotic method: not something Letterboxd writes
-    out.push(new File([bytes],name,{type:'text/csv'}));
+    out.push(new File([bytes],liked?LIKES_FILE:name,{type:'text/csv'}));
   }
   if(!out.length) throw new Error('No CSV files found at the top level of that zip. It should be the export Letterboxd gave you, unmodified.');
   return out;
@@ -1467,6 +1479,48 @@ function parseProfileUsername(text){
   if(rows.length<2) return '';
   const i=rows[0].map(h=>h.toLowerCase().trim()).indexOf('username');
   return i<0?'':cleanLbUser(rows[1][i]);
+}
+// profile.csv names your four Letterboxd favourites, but only as boxd.it film
+// links. ratings.csv and watched.csv carry the same links, which is how they
+// are matched to films (diary.csv's links are per entry, so they never match).
+function parseProfileFavorites(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(rows.length<2) return [];
+  const i=rows[0].map(h=>h.toLowerCase().trim()).indexOf('favorite films');
+  if(i<0) return [];
+  return String(rows[1][i]||'').split(/[,\s]+/).filter(u=>LB_URI_RE.test(u)).slice(0,4);
+}
+// Film link -> "Name||Year", from any film log that has a Letterboxd URI column
+function parseFilmUris(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(!rows.length) return {};
+  const header=rows[0].map(h=>h.toLowerCase().trim());
+  const gi=k=>header.findIndex(h=>h===k);
+  const nameI=gi('name'), yearI=gi('year'), uriI=gi('letterboxd uri');
+  if(nameI<0||yearI<0||uriI<0) return {};
+  const out={};
+  for(let i=1;i<rows.length;i++){
+    const c=rows[i], name=(c[nameI]||'').trim(), year=parseInt(c[yearI],10), uri=(c[uriI]||'').trim();
+    if(name&&year&&LB_URI_RE.test(uri)) out[uri]=name+'||'+year;
+  }
+  return out;
+}
+// likes/films.csv: the films you gave a heart, as "Name||Year" keys
+function parseLikedFilms(text){
+  const rows=parseCSVRows(text).filter(r=>r.length>1||r[0]);
+  if(!rows.length) return [];
+  const header=rows[0].map(h=>h.toLowerCase().trim());
+  const nameI=header.indexOf('name'), yearI=header.indexOf('year');
+  if(nameI<0||yearI<0) return [];
+  const out=new Set();
+  for(let i=1;i<rows.length;i++){
+    const name=(rows[i][nameI]||'').trim(), year=parseInt(rows[i][yearI],10);
+    if(name&&year) out.add(name+'||'+year);
+  }
+  return [...out];
+}
+function sanitizeFilmKeys(raw,max){
+  return Array.isArray(raw)?[...new Set(raw.filter(k=>typeof k==='string'&&k.includes('||')&&k.length<=260))].slice(0,max):[];
 }
 function isProfileFile(f){ return /^profile\.csv$/i.test(String(f&&f.name||'')); }
 // Files every Letterboxd export carries that are not film logs. Skipped quietly —
@@ -1548,7 +1602,16 @@ async function filesFromDrop(dt){
   const out=[];
   for(const e of entries){
     if(e.isFile){ const f=await toFile(e); if(f) out.push(f); }
-    else if(e.isDirectory){ for(const c of await readDir(e)) if(c.isFile){ const f=await toFile(c); if(f) out.push(f); } }
+    else if(e.isDirectory){
+      for(const c of await readDir(e)){
+        if(c.isFile){ const f=await toFile(c); if(f) out.push(f); }
+        else if(c.isDirectory&&/^likes$/i.test(c.name)){
+          const lf=(await readDir(c)).find(x=>x.isFile&&/^films\.csv$/i.test(x.name));
+          const f=lf&&await toFile(lf);
+          if(f) out.push(new File([f],LIKES_FILE,{type:'text/csv'}));
+        }
+      }
+    }
   }
   return out;
 }
@@ -1571,12 +1634,14 @@ async function startAnalysis(){
   document.getElementById('proc-title').textContent=STATE.userName?`Sculpting ${STATE.userName}'s mountain…`:'Sculpting your mountain…';
   showPage('page-processing');
   try{
-    let allRaw=[], diary=[], ratedOn={}, wlRows=[], wlError='';
+    let allRaw=[], diary=[], ratedOn={}, wlRows=[], wlError='', liked=null, favUris=null, uris={};
     const skipped=[];
     let lastError=null;
     for(const file of STATE.selectedFiles){
-      if(isProfileFile(file)||isKnownNonLogFile(file)) continue;
+      if(isProfileFile(file)){ favUris=parseProfileFavorites(await file.text()); continue; }
+      if(isKnownNonLogFile(file)) continue;
       const text=await file.text();
+      if(isLikesFile(file)){ liked=parseLikedFilms(text); continue; }
       if(isWatchlistFile(file)){
         // A bad watchlist shouldn't cost the whole analysis
         try{ wlRows=wlRows.concat(parseWatchlistCSV(text)); }catch(e){ wlError=e.message; }
@@ -1587,10 +1652,14 @@ async function startAnalysis(){
       try{ allRaw=allRaw.concat(parseLetterboxdCSV(text)); }
       catch(e){ skipped.push(file.name); lastError=e; continue; }
       diary=diary.concat(parseDiaryCSV(text));   // same text, second pass — keeps the dates
+      Object.assign(uris,parseFilmUris(text));
       const rd=parseRatingDates(text);
       for(const k in rd) if(!ratedOn[k]||rd[k]<ratedOn[k]) ratedOn[k]=rd[k];
     }
     STATE._diary=dedupeDiary(diary); STATE._ratedOn=ratedOn; STATE._history=null;
+    // Re-uploading only diary.csv keeps the likes and favourites already known
+    if(liked) STATE._liked=liked;
+    if(favUris){ const favs=favUris.map(u=>uris[u]).filter(Boolean); if(favs.length||!favUris.length) STATE._favorites=favs; }
     STATE._lbSync=null; _lbSyncRun++;   // a fresh export supersedes any feed check in flight
     if(STATE.runId!==thisRunId) return;
     if(!allRaw.length) throw lastError||new Error('No films found.');
@@ -1651,9 +1720,46 @@ function rescoreFromState(){
     ? buildPersonMaps(STATE._films.filter(f=>passesFilters(f,STATE._filmData[f.name+'||'+f.year])),STATE._filmData)
     : all;
   STATE._byDir=maps.byDir; STATE._byWriter=maps.byWriter; STATE._byActor=maps.byActor;
-  STATE.directors=scoreDirectors(maps.byDir,all.globalMean);
-  STATE.writers=computeScores(maps.byWriter,all.globalMean,qualifyMin());
-  STATE.actors=computeScores(maps.byActor,all.globalMean,qualifyMin());
+  STATE.directors=shownPeople('directors',scoreDirectors(maps.byDir,all.globalMean));
+  STATE.writers=shownPeople('writers',computeScores(maps.byWriter,all.globalMean,qualifyMin()));
+  STATE.actors=shownPeople('actors',computeScores(maps.byActor,all.globalMean,qualifyMin()));
+}
+
+// ─── Hiding a person from one tab ─────────────────────────────────────────────
+// A narrator, a voice-only role, or simply someone you don't want up there. The
+// person is scored as usual and then left out, so hiding one person never moves
+// anyone else's score — only the ranks below them close up. Hiding is per tab:
+// an actor-director hidden from Actors stays on Directors.
+function hiddenSet(cat){ return new Set((STATE.hiddenPeople||{})[cat]||[]); }
+function shownPeople(cat,list){
+  const h=hiddenSet(cat);
+  return h.size?list.filter(d=>!h.has(d.name)):list;
+}
+function sanitizeHiddenPeople(raw){
+  const out={directors:[],writers:[],actors:[]};
+  if(raw&&typeof raw==='object') for(const cat of CATS)
+    if(Array.isArray(raw[cat])) out[cat]=[...new Set(raw[cat].filter(n=>typeof n==='string'&&n).map(n=>n.slice(0,120)))].slice(0,500);
+  return out;
+}
+function setPersonHidden(cat,name,hide){
+  if(!CATS.includes(cat)||typeof name!=='string') return;
+  const list=(STATE.hiddenPeople[cat]||[]).filter(n=>n!==name);
+  if(hide) list.push(name);
+  STATE.hiddenPeople[cat]=list;
+  const y=window.scrollY;
+  reScoreAndRender();
+  window.scrollTo(0,y);
+  showToast(hide?`${name} hidden from your ${CAT_LABELS[cat]} — bring them back at the bottom of the tab`:`${name} is back on your ${CAT_LABELS[cat]}`);
+}
+function hidePerson(cat,name){ setPersonHidden(cat,name,true); }
+function unhidePerson(cat,name){ setPersonHidden(cat,name,false); }
+function hiddenPeopleHTML(cat){
+  const names=(STATE.hiddenPeople[cat]||[]);
+  if(!names.length) return '';
+  return `<div style="margin-top:28px;color:#8c8ca2;font-size:12px;line-height:2">
+    <span class="eyebrow" style="margin-right:8px">Hidden (${names.length})</span>
+    ${names.map(n=>`<button type="button" onclick="unhidePerson('${cat}',${esc(JSON.stringify(n))})" title="${esc('Put '+n+' back on this Rushmore')}" style="background:#111120;border:1px solid #1e1e2e;border-radius:20px;padding:2px 10px;margin:0 4px 4px 0;color:#b2b2c4;font-family:inherit;font-size:12px;cursor:pointer">${esc(n)} <span style="color:#c8a840">↺</span></button>`).join('')}
+  </div>`;
 }
 
 // The TMDB pass for films the database lacked, run once the page is up. When it
@@ -1736,7 +1842,6 @@ function resetSettings(){
   set('sl-minFilms',3); txt('lbl-minFilms','3'); set('sl-topActors',5); txt('lbl-topActors','5');
   set('sl-minRuntime',MIN_RUNTIME); txt('lbl-minRuntime',MIN_RUNTIME+' min');
   const cb=document.getElementById('cb-countDocs'); if(cb) cb.checked=false;
-  setCompletionBonusUI(COMPLETION_BONUS_DEFAULT);
   setWeightsUI(WEIGHTS_DEFAULT);
   WL_WEIGHTS=Object.assign({},WL_WEIGHTS_DEFAULT);
   FILM_WEIGHTS=Object.assign({},FILM_WEIGHTS_DEFAULT);
@@ -1751,6 +1856,7 @@ function resetApp(){
   STATE._byDir=null;STATE._byWriter=null;STATE._byActor=null;STATE._byDirAll=null;STATE._filmData=null;STATE._films=null;
   STATE._totalFilms=0;STATE._matchedFilms=0;STATE._dbMisses=0;STATE._missList=[];STATE._activeGenre=null;STATE._activeDecade=null;STATE._conformity=null;
   STATE._diary=[];STATE._ratedOn={};STATE._history=null;STATE._filmog=loadFilmogCache();STATE.recMode='balanced';
+  STATE.hiddenPeople={directors:[],writers:[],actors:[]}; STATE._favorites=[]; STATE._liked=[];
   STATE.lbUser='';STATE.lbSyncedAt=0;STATE._lbSync=null;_lbSyncRun++;renderLbSync();
   clearWatchlist();resetProviders();STATE.recSource='directors';invalidateCoverage();resetSettings();
   _catUI={}; _dirtyPanels.clear();
@@ -1784,19 +1890,41 @@ async function idbDo(mode,fn){
   } finally { db.close(); }
 }
 
-let _persistTimer=null, _persistOff=false;
+// The session is several megabytes of JSON, and almost every repaint asks for a
+// save. Saves wait for things to go quiet, run when the browser is idle, skip a
+// write when nothing changed, and are flushed when the tab is hidden or closed
+// so the longer wait can't lose anything.
+const PERSIST_DELAY=5000;
+let _persistTimer=null, _persistOff=false, _persistDirty=false, _lastPersisted='', _persistGen=0;
 function schedulePersist(){
   if(_persistOff||!STATE._byDir) return;   // nothing analysed yet
+  _persistDirty=true;
   clearTimeout(_persistTimer);
-  _persistTimer=setTimeout(persistSession,1500);
+  const gen=_persistGen;   // a save queued before Forget must not write the session back
+  _persistTimer=setTimeout(()=>{
+    const go=()=>{ if(gen===_persistGen) persistSession(); };
+    if(typeof requestIdleCallback==='function') requestIdleCallback(go,{timeout:3000}); else go();
+  },PERSIST_DELAY);
+}
+function flushPersist(){
+  if(!_persistDirty||_persistOff) return;
+  clearTimeout(_persistTimer);
+  persistSession();
 }
 async function persistSession(){
+  _persistDirty=false;
   if(!STATE._byDir) return;
   try{
-    const rec={savedAt:Date.now(),userName:STATE.userName||'',films:(STATE._films||[]).length,
-      payload:JSON.stringify(buildSavePayload())};
+    const payload=JSON.stringify(buildSavePayload());
+    if(payload===_lastPersisted) return;
+    const rec={savedAt:Date.now(),userName:STATE.userName||'',films:(STATE._films||[]).length,payload};
     await idbDo('readwrite',st=>st.put(rec,SESSION_KEY));
+    _lastPersisted=payload;
   }catch(e){ console.warn('Could not remember this session',e); }
+}
+if(typeof window!=='undefined'&&window.addEventListener){
+  window.addEventListener('pagehide',flushPersist);
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') flushPersist(); });
 }
 async function loadSessionRecord(){
   try{ return await idbDo('readonly',st=>st.get(SESSION_KEY)); }catch(e){ return null; }
@@ -1807,6 +1935,7 @@ async function loadSessionRecord(){
 // key behind made that promise false.
 async function forgetSession(){
   clearTimeout(_persistTimer); clearTimeout(_streamSaveTimer); clearTimeout(_provSaveTimer);   // or they'd write back what's being forgotten
+  _persistDirty=false; _lastPersisted=''; _persistGen++;
   try{ await idbDo('readwrite',st=>st.delete(SESSION_KEY)); }catch(e){}
   try{
     for(const k of Object.keys(localStorage)) if(k.startsWith('cmr_')) localStorage.removeItem(k);
@@ -1857,7 +1986,7 @@ async function resumeSession(){
     showToast('That saved session could not be opened');
     // Only the broken record goes. forgetSession() would also have taken the API
     // key and the My collection list, which lives nowhere else.
-    clearTimeout(_persistTimer);
+    clearTimeout(_persistTimer); _persistDirty=false; _persistGen++;
     try{ await idbDo('readwrite',st=>st.delete(SESSION_KEY)); }catch(e2){}
     renderResumeCard();
   }
@@ -2056,7 +2185,6 @@ function buildSavePayload(){
     topActors:TOP_ACTORS,
     minRuntime:MIN_RUNTIME,
     countDocs:COUNT_DOCS,
-    completionBonus:COMPLETION_BONUS,
     // Exact TMDB filmographies — expensive to fetch, so carry them along
     filmog:STATE._filmog||{},
     directors:STATE.directors,
@@ -2077,6 +2205,10 @@ function buildSavePayload(){
     // Films marked "not interested" on Watch Next
     hidden:Object.keys(hiddenMap()).length?hiddenMap():null,
     weights:Object.assign({},WEIGHTS),
+    // People hidden by hand from one tab's Rushmore
+    hiddenPeople:STATE.hiddenPeople,
+    // Your Letterboxd profile favourites and liked films, as "Name||Year" keys
+    favorites:STATE._favorites||[], liked:STATE._liked||[],
     wlWeights:Object.assign({},WL_WEIGHTS),
     filmWeights:Object.assign({},FILM_WEIGHTS),
     recMode:STATE.recMode, recSource:STATE.recSource, wlMaxRuntime:STATE.wlMaxRuntime, recPeople:STATE.recPeople, wlStreamOnly:STATE.wlStreamOnly,
@@ -2482,7 +2614,7 @@ async function fetchDirectorFilmography(name, apiKey, signal){
     await Promise.all(capped.slice(i,i+TMDB_CONCURRENCY).map(async c=>{
       // A detail call that fails keeps its credit with the runtime unknown, which
       // isFeature counts. Dropping it made the list short, and a short "exact"
-      // list could hand out a 100% bonus for a filmography not finished.
+      // list could hand out a 100% badge for a filmography not finished.
       const keep=()=>{ failed++; films.push({t:normTitle(c.title),y:c.year,title:c.title,rt:0,va:c.va?c.va/2:null,g:'',poster:null}); };
       try{
         const r=await tmdbFetch(`${base}/movie/${c.id}?api_key=${key}&language=en-US`,signal);
@@ -2613,39 +2745,33 @@ function dirByName(name){
   return _dirByName[name];
 }
 
-// ─── 100% filmography bonus ───────────────────────────────────────────────────
-// Coverage is computed from a director's logged films plus their filmography, never
-// from their score, so it can feed back into the score without any circularity.
+// ─── 100% filmography badge ───────────────────────────────────────────────────
 function isCompleteCoverage(cov){ return !!(cov&&cov.total>0&&!cov.missing.length); }
 
 function scoreDirectors(byDir, globalMean){
-  return applyCompletionBonus(computeScores(byDir,globalMean,qualifyMin()));
+  return markCompletion(computeScores(byDir,globalMean,qualifyMin()));
 }
 // One decade of a typical library is thin — a 500-film library has nobody with
 // three rated 1990s films by the same director — so inside a decade filter two
 // rated films are enough. The genre chips keep the normal minimum.
 function qualifyMin(){ return STATE._activeDecade?Math.min(MIN_FILMS,2):MIN_FILMS; }
 
-// computeScores builds fresh objects every call, so the bonus can't stack.
-// Only an exact (TMDB) filmography earns points. The built-in estimate lists a
-// director's best-known work, so "every film the database knows" is routinely
-// three films of thirty; a synthetic 3,000-film library flagged 51 directors
-// complete on that basis. The estimate still shows a ≈ badge, it just can't
-// move the ranking.
-function applyCompletionBonus(list){
+// A finished filmography earns a 🏁 badge, not points. It used to add +3 for an
+// exact (TMDB) filmography only, so whether someone got the points depended on
+// whether a lookup had run rather than on what you'd watched. The built-in
+// estimate lists only a director's best-known work, so it shows a ≈ badge.
+function markCompletion(list){
   for(const d of list){
     const cov=computeCoverage(d);
-    d.baseScore=d.score;
     d.complete=isCompleteCoverage(cov);
     d.completeExact=d.complete&&cov.source==='tmdb';
-    if(d.completeExact) d.score+=COMPLETION_BONUS/100;
   }
   invalidateCoverage();
-  return list.sort(byScoreThenMerit);
+  return list;
 }
 
 // Coverage also moves without a re-score — an exact filmography arrives, or the
-// feature definition changes — and the bonus must follow or the ranking goes stale.
+// feature definition changes — and the badge must follow.
 function completionOutOfDate(names){
   if(!STATE._byDir) return false;
   const list=names?names.map(dirByName).filter(Boolean):STATE.directors;
@@ -2655,18 +2781,12 @@ function completionOutOfDate(names){
   });
 }
 
-function setCompletionBonusUI(v){
-  COMPLETION_BONUS=v;
-  const el=document.getElementById('sl-completionBonus'); if(el) el.value=v;
-  const lbl=document.getElementById('lbl-completionBonus'); if(lbl) lbl.textContent=v?'+'+v+' pts':'off';
-}
-
 function completeBadgeHTML(d){
   if(!d||!d.complete) return '';
   const tip=d.completeExact
-    ? `You've seen every feature ${d.name} has directed, per TMDB.`+(COMPLETION_BONUS?` Worth +${COMPLETION_BONUS} points on their score.`:'')
-    : `You've seen every feature the built-in database lists for ${d.name}. That list is only their best-known work, so no bonus yet — open the filmography bar and fetch the exact list to confirm.`;
-  return `<span title="${esc(tip)}" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;background:#4a9a6a14;border:1px solid #4a9a6a44;color:#6fbf8f;border-radius:20px;padding:1px 8px;font-size:10px;white-space:nowrap">🏁 ${d.completeExact?'':'≈ '}100%${d.completeExact&&COMPLETION_BONUS?' · +'+COMPLETION_BONUS:''}</span>`;
+    ? `You've seen every feature ${d.name} has directed, per TMDB.`
+    : `You've seen every feature the built-in database lists for ${d.name}. That list is only their best-known work — open the filmography bar and fetch the exact list to confirm.`;
+  return `<span title="${esc(tip)}" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;background:#4a9a6a14;border:1px solid #4a9a6a44;color:#6fbf8f;border-radius:20px;padding:1px 8px;font-size:10px;white-space:nowrap">🏁 ${d.completeExact?'':'≈ '}100%</span>`;
 }
 
 // ─── Time left in a filmography ───────────────────────────────────────────────
@@ -2774,7 +2894,7 @@ function renderFilmogModal(){
       <span style="color:#a9a9bc;font-size:13px;margin-left:6px">${cov.seen} of ${cov.total}${cov.truncated?'+':''} feature${cov.total!==1?'s':''} seen</span></div>
     <div class="progress-bar" style="margin-bottom:12px"><div class="progress-fill" style="width:${cov.pct}%"></div></div>
     ${isCompleteCoverage(cov)?`<div style="background:#4a9a6a14;border:1px solid #4a9a6a44;border-radius:8px;padding:8px 12px;color:#6fbf8f;font-size:12px;line-height:1.6;margin-bottom:12px">
-      🏁 Filmography complete${exact&&COMPLETION_BONUS?` — <b>+${COMPLETION_BONUS} points</b> on their Rushmore score`:''}.${exact?'':' <span style="color:#8c8ca2">Based on the estimate, which earns no bonus — fetch the exact filmography below to confirm.</span>'}
+      🏁 Filmography complete.${exact?'':' <span style="color:#8c8ca2">Based on the estimate — fetch the exact filmography below to confirm.</span>'}
     </div>`:''}
     <div style="font-size:11px;line-height:1.65;margin-bottom:16px">${source}${rule}</div>
     ${exact&&hasKey?`<div style="color:#8c8ca2;font-size:11px;margin:-8px 0 18px">${loading?'Refreshing from TMDB…'
@@ -2811,7 +2931,7 @@ function updateCoverageBlocks(name){
   });
   if(_filmogModalName===name) renderFilmogModal();   // keep an open modal in step
   scheduleRecsRender();                              // a fuller filmography changes the pool
-  if(completionOutOfDate([name])) scheduleRender();  // and may add or remove the 100% bonus
+  if(completionOutOfDate([name])) scheduleRender();  // and may add or remove the 🏁 badge
 }
 
 // ─── Person Card HTML ─────────────────────────────────────────────────────────
@@ -2886,6 +3006,7 @@ function personCardHTML(d,rank,cat,showPosters){
       ${cat==='directors'?`<div class="cov-block" data-person="${esc(d.name)}" data-ac="${ac}">${coverageInnerHTML(d.name,ac)}</div>`:''}
     </div>
     ${d.topFilms.length?`<div><div class="stat-lbl" style="color:#8c8ca2;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Best Films</div>${topFilms}</div>`:''}
+    <div style="text-align:right;margin-top:8px"><button type="button" onclick="hidePerson('${cat}',${esc(JSON.stringify(d.name))})" title="${esc('Leave '+d.name+' off your '+CAT_LABELS[cat]+' Rushmore. Their other tabs are unaffected.')}" style="background:none;border:none;color:#6d6d84;font-family:inherit;font-size:10px;cursor:pointer;padding:2px 0">Hide from ${esc(CAT_LABELS[cat])}</button></div>
   </div>`;
 }
 
@@ -2900,7 +3021,7 @@ function renderCategoryPanel(cat){
       <div style="font-size:32px;margin-bottom:12px">${icon}</div>
       <div style="font-size:15px">Not enough ${catLabel.toLowerCase()} with ${qualifyMin()}+ rated films${anyFilter()?' in '+esc(filterLabel()):' in your library'}.</div>
       <div style="font-size:12px;margin-top:8px">Lower “Min rated films to qualify” under ⚖ Settings.</div>
-    </div>`;
+    </div>${hiddenPeopleHTML(cat)}`;
   }
 
   // Search/sort state per category survives a re-render (see catUI)
@@ -2943,6 +3064,7 @@ function renderCategoryPanel(cat){
     <div id="grid-${cat}" class="dir-grid"></div>
     <div id="more-${cat}"></div>
     <div id="empty-${cat}" style="text-align:center;color:#7d7d94;padding:40px 0;font-size:14px;display:none">No results match your search.</div>
+    ${hiddenPeopleHTML(cat)}
   `;
 }
 
@@ -3008,10 +3130,7 @@ function blindSpotsHTML(){
   </div>`;
   const grid=(title,list)=>list.length?`<div style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin:14px 0 8px">${title}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${list.slice(0,BLIND_SHOWN).map(row).join('')}</div>`:'';
-  return `<div id="sec-blind" style="margin-top:40px;scroll-margin-top:110px">
-    <div class="eyebrow" style="margin-bottom:6px">Blind spots</div>
-    <div style="color:#8c8ca2;font-size:11px;max-width:640px">How much of the ${BLIND_TOP} best-known films in each genre and decade you have seen, least first — with the biggest ones you are missing.</div>
-    ${grid('Genres',b.genres)}${grid('Decades',b.decades)}</div>`;
+  return `<div id="sec-blind">${grid('Genres',b.genres)}${grid('Decades',b.decades)}</div>`;
 }
 
 // ─── Directors to explore ─────────────────────────────────────────────────────
@@ -3105,10 +3224,9 @@ function exploreHTML(){
   };
   const chips=Object.keys(EXPLORE_VIEWS).map(k=>{ const on=k===view, v=EXPLORE_VIEWS[k];
     return `<button onclick="setExploreView('${k}')" title="${esc(v.hint)}" aria-pressed="${on}" style="background:${on?'#c8a840':'#111120'};border:1px solid ${on?'#c8a840':'#1e1e2e'};color:${on?'#08080f':'#c8c0b0'};border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${esc(v.label)}</button>`; }).join('');
-  return `<div id="sec-explore" style="margin-top:40px;scroll-margin-top:110px">
-    <div class="eyebrow" style="margin-bottom:6px">Directors to explore</div>
-    <div style="color:#8c8ca2;font-size:11px;max-width:640px;margin-bottom:10px">Directors you've seen fewer than ${EXPLORE_MAX_SEEN} films by, with their best-known ones you haven't. ${esc(EXPLORE_VIEWS[view].hint)}.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${chips}</div>
+  return `<div id="sec-explore">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">${chips}</div>
+    <div style="color:#8c8ca2;font-size:11px;max-width:640px;margin-bottom:12px">${esc(EXPLORE_VIEWS[view].hint)}.</div>
     ${list.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${list.map(card).join('')}</div>`
       :`<div style="color:#7d7d94;font-size:12px">Nobody fits — ${view==='liked'?'no director you rated highly has films left that you haven’t seen':'try another view'}.</div>`}
   </div>`;
@@ -3786,21 +3904,16 @@ function recCardHTML(r,i,gMean,showPosters){
 
 // The extra sections sit under three dozen cards — fifteen screens down on a
 // phone — so the top of the panel links straight to them.
-function jumpTo(id){ const el=document.getElementById(id); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); }
-function recsJumpHTML(items){
-  items=items.filter(Boolean);
-  if(!items.length) return '';
-  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-6px 0 16px">
-    <span style="color:#8c8ca2;font-size:10px;letter-spacing:3px;text-transform:uppercase">Jump to</span>
-    ${items.map(([id,label])=>`<button type="button" onclick="jumpTo('${id}')" style="background:none;border:1px solid #2a2a40;color:#c8c0b0;border-radius:20px;padding:4px 12px;cursor:pointer;font-family:inherit;font-size:12px">${label} ↓</button>`).join('')}
-  </div>`;
-}
+// Where Watch Next draws from. Directors to explore and Blind spots used to sit
+// under the main list behind "Jump to" links; they are sources of their own now.
+const REC_SOURCES=['directors','explore','blind','watchlist','owned'];
 function renderRecsPanel(){
   const el=document.getElementById('cat-recs');
   if(!el) return;
   schedulePersist();   // watchlist, its lookups and fetched filmographies all end up here
   const mode=STATE.recMode, w=REC_MODES[mode]||REC_MODES.balanced;
   const onWl=STATE.recSource==='watchlist', onOwn=STATE.recSource==='owned', wl=STATE._watchlist, un=STATE.userName;
+  const onEx=STATE.recSource==='explore', onBs=STATE.recSource==='blind';
   const ownN=ownedList().films.length;
   const src=(k,label)=>{
     const on=STATE.recSource===k;
@@ -3811,20 +3924,26 @@ function renderRecsPanel(){
       <div class="eyebrow" style="margin-bottom:5px">🍿 What to Watch Next</div>
       <h1 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(onOwn
         ? (un?un+"'s":'Your')+' Collection, Ranked'
+        : onEx ? 'Directors to Explore'
+        : onBs ? (un?un+"'s":'Your')+' Blind Spots'
         : onWl
         ? (un?un+"'s":'Your')+' Watchlist, Ranked'
         : 'Unseen From '+(un?un+"'s":'Your')+' Favorites')}</h1>
       <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:620px">${onOwn
         ? "Films you own but haven't watched yet, ranked the same way as your watchlist. It's kept in this browser, apart from your Letterboxd export."
+        : onEx ? `Directors you've seen fewer than ${EXPLORE_MAX_SEEN} films by, with their best-known ones you haven't.`
+        : onBs ? `How much of the ${BLIND_TOP} best-known films in each genre and decade you have seen, least first — with the biggest ones you are missing.`
         : onWl
         ? 'Your Letterboxd watchlist, ordered by how well each film fits the directors, writers, actors and genres you rate highest.'
         : "Unseen films by the directors, actors and writers you rate highest — scored on your whole taste, weighted toward the filmographies you're closest to finishing."}</p>
     </div>
     <div role="group" aria-label="Recommend from" style="display:inline-flex;gap:3px;background:#0c0c18;border:1px solid #1e1e2e;border-radius:10px;padding:3px;margin-bottom:16px;flex-wrap:wrap">
-      ${src('directors','🎬 From people you love')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}${src('owned','📀 My collection'+(ownN?` <span class="mono" style="color:#c8a840">${ownN}</span>`:''))}
+      ${src('directors','🎬 From people you love')}${src('explore','🧭 Directors to explore')}${src('blind','🕳 Blind spots')}${src('watchlist','📋 My watchlist'+(wl?` <span class="mono" style="color:#c8a840">${wl.films.length}</span>`:''))}${src('owned','📀 My collection'+(ownN?` <span class="mono" style="color:#c8a840">${ownN}</span>`:''))}
     </div>`;
 
-  if(onWl){ const bs=blindSpotsHTML(); el.innerHTML=header+recsJumpHTML([bs&&['sec-blind','🕳 Blind spots']])+watchlistBodyHTML()+bs; hydrateProviders(); return; }
+  if(onWl){ el.innerHTML=header+watchlistBodyHTML(); hydrateProviders(); return; }
+  if(onEx){ el.innerHTML=header+(exploreHTML()||'<div style="color:#7d7d94;font-size:13px;padding:30px 0">Still loading the film database…</div>'); return; }
+  if(onBs){ el.innerHTML=header+(blindSpotsHTML()||`<div style="color:#7d7d94;font-size:13px;padding:30px 0">No blind spots — you've seen at least half of the best-known films in every genre and decade.</div>`); return; }
   if(onOwn){ const keep=captureOwnedInput(); el.innerHTML=header+ownedBodyHTML(); restoreOwnedInput(keep); return; }
 
   const tabs=Object.keys(REC_MODES).map(k=>{
@@ -3849,18 +3968,16 @@ function renderRecsPanel(){
       </label>
     </div>`;
 
-  const ex=exploreHTML(), bs=blindSpotsHTML();
-  const jump=recsJumpHTML([ex&&['sec-explore','🧭 Directors to explore'],bs&&['sec-blind','🕳 Blind spots']]);
   if(!recs.length){
-    el.innerHTML=header+jump+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
+    el.innerHTML=header+modes+`<div style="text-align:center;padding:60px 0;color:#7d7d94">
       <div style="font-size:15px">Nothing to recommend${anyFilter()?' in '+esc(filterLabel()):''} — you've seen everything we know of.</div>
-      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab to widen the pool.</div></div>${ex}${hiddenListHTML()}${bs}`;
+      <div style="font-size:12px;margin-top:8px;color:#777787">Try ⟳ Exact filmography on the Directors tab, or 🧭 Directors to explore above.</div></div>${hiddenListHTML()}`;
     return;
   }
   const gMean=buildTasteProfile().gMean;
   setTimeout(hydrateProviders,0);
   const recPosters=anyPoster(recs);
-  el.innerHTML=header+jump+modes+`<div class="dir-grid">${recs.map((r,i)=>recCardHTML(r,i,gMean,recPosters)).join('')}</div>
+  el.innerHTML=header+modes+`<div class="dir-grid">${recs.map((r,i)=>recCardHTML(r,i,gMean,recPosters)).join('')}</div>
     <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-top:20px">
       <div style="color:#777787;font-size:11px;line-height:1.7;flex:1;min-width:240px">
         Drawn from ${STATE.directors.length} qualifying directors${STATE.recPeople?' plus the actors and writers you rate highest':''}. Coverage marked “est.” comes from the built-in database,
@@ -3868,9 +3985,7 @@ function renderRecsPanel(){
       </div>
       <button class="btn-ghost btn-sm" onclick="exportLetterboxdList('recs')" title="Download these as a CSV that Letterboxd imports as a list">↓ Letterboxd list</button>
     </div>
-    ${ex}
-    ${hiddenListHTML()}
-    ${bs}`;
+    ${hiddenListHTML()}`;
 }
 
 // ─── Taste profile ────────────────────────────────────────────────────────────
@@ -4128,7 +4243,7 @@ async function downloadWatchlistCard(){
 }
 
 function setRecSource(src){
-  STATE.recSource=src==='watchlist'||src==='owned'?src:'directors';
+  STATE.recSource=REC_SOURCES.includes(src)?src:'directors';
   renderRecsPanel();
 }
 
@@ -4345,11 +4460,11 @@ function tasteChips(s,d,title,year,gMean,chip){
   // Person chips open your history with them; genre and rating chips stay plain
   const pchip=(name,txt,col,tip)=>personLinkHTML(name,chip(txt,col,tip+' Click for the films.'),'Your films with '+name);
   const chips=[];
-  // The last film standing between you and a 100% filmography — and its bonus
+  // The last film standing between you and a 100% filmography
   for(const name of dirsOf(d)){
     const dd=dirByName(name), cov=dd?getCoverage(dd):null;
     if(cov&&cov.missing.length===1&&sameFilm(cov.missing[0],{t:normTitle(title),y:year}))
-      chips.push(chip(`🏁 Completes ${esc(name)}`,'#6fbf8f',`The only feature of ${name}'s you haven't seen${cov.source==='tmdb'&&COMPLETION_BONUS?` — watching it earns the +${COMPLETION_BONUS} completion bonus`:cov.source==='tmdb'?'':' that the built-in database knows of'}.`));
+      chips.push(chip(`🏁 Completes ${esc(name)}`,'#6fbf8f',`The only feature of ${name}'s you haven't seen${cov.source==='tmdb'?'':' that the built-in database knows of'}.`));
   }
   const dn=s.dirName;
   if(s.dirE&&s.dirE.v>=0.2) chips.push(pchip(dn,pTxt('🎬',dn,s.dirE),'#c8a840',wlPersonTip('Director',dn,s.dirE,gMean)));
@@ -4364,6 +4479,17 @@ function tasteChips(s,d,title,year,gMean,chip){
 
 // `owned` drops the streaming line and JustWatch link — it's already on your
 // shelf — and adds a remove button ('modal' leaves it out of the Surprise-me card).
+// The two biggest pulls on a film's match, in words: "Fincher · thriller".
+// A bare 63 said nothing about why; the number stays in the tooltip.
+function matchReasons(s,weights){
+  const W=weights||WL_WEIGHTS, out=[];
+  const named={director:s.dirName, writer:s.writers[0]&&s.writers[0].n, actor:s.actors[0]&&s.actors[0].n,
+    genre:s.genres[0]&&s.genres[0].n.toLowerCase(), acclaim:'acclaimed'};
+  const pulls=WL_AXES.map(a=>({k:a.k,v:(W[a.k]||0)*s.ax[a.k]})).filter(p=>p.v>0&&s.ax[p.k]>=0.15&&named[p.k]).sort((a,b)=>b.v-a.v);
+  for(const p of pulls){ if(!out.includes(named[p.k])) out.push(named[p.k]); if(out.length>=2) break; }
+  return out.length?out.join(' · '):s.total<-0.05?'Not your usual':'A fair fit';
+}
+
 function wlCardHTML(x,i,gMean,showPosters,owned){
   const {f,d,s}=x;
   const col=s.match>=70?'#6fbf8f':s.match>=55?'#c8a840':'#8888aa';
@@ -4386,12 +4512,9 @@ function wlCardHTML(x,i,gMean,showPosters,owned){
       <div style="flex:1;min-width:0">
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3">${esc(f.name)}</div>
         <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${meta}</div>
+        <div style="color:${col};font-size:12px;font-weight:bold;line-height:1.3;margin-top:5px" title="${esc('Match '+s.match+' (50 is neutral). Each axis runs from -1 to +1 — '+W+'.')}"><span style="color:#777787;font-size:9px;letter-spacing:2px;text-transform:uppercase;font-weight:normal;margin-right:6px">Because</span>${esc(matchReasons(s))}</div>
       </div>
       ${owned===true?ownedRemoveBtn(f):''}
-      <div style="text-align:right;flex-shrink:0" title="${esc('Match: 50 is neutral. Each axis runs from -1 to +1 — '+W+'.')}">
-        <div class="mono" style="color:${col};font-size:18px;font-weight:bold;line-height:1">${s.match}</div>
-        <div style="color:#777787;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin-top:3px">match</div>
-      </div>
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${chips.length?chips.join(''):'<span style="color:#777787;font-size:10px">No strong signals either way</span>'}</div>
     ${owned?'':providerSlotHTML(f.name,f.year,d.tmdbId)}
@@ -4963,18 +5086,22 @@ const HOT_MIN_DIFF=1.0, HOT_SHOWN=10, HOT_MIN_FILMS=10, HOT_AGREE=0.5, HOT_CARD_
 function hotTakes(){
   const films=STATE._films||[], fd=STATE._filmData||{};
   const rows=[];
+  // What was left out and why, so an empty tab can say so
+  const out={unrated:0,unmatched:0,noCrowd:0,notInDb:0};
   for(const f of films){
-    if(!(f.rating>0)) continue;
     const d=fd[f.name+'||'+f.year];
-    if(!d||!(d.voteAvg>0)||!passesFilters(f,d)) continue;
-    if(!FILM_DB[f.name+'||'+f.year]&&!fuzzyDBMatch(f)) continue;
+    if(d?!passesFilters(f,d):anyFilter()) continue;   // unmatched films can't be placed in a genre
+    if(!(f.rating>0)){ out.unrated++; continue; }
+    if(!d){ out.unmatched++; continue; }
+    if(!(d.voteAvg>0)){ out.noCrowd++; continue; }
+    if(!FILM_DB[f.name+'||'+f.year]&&!fuzzyDBMatch(f)){ out.notInDb++; continue; }
     rows.push({f,d,crowd:d.voteAvg,diff:f.rating-d.voteAvg});
   }
   const n=rows.length;
   // Biggest gap first; on a tie, the stronger feeling (a 5★ over a 4½★ love)
   const loved=rows.filter(r=>r.diff>=HOT_MIN_DIFF).sort((a,b)=>(b.diff-a.diff)||(b.f.rating-a.f.rating)||a.f.name.localeCompare(b.f.name));
   const panned=rows.filter(r=>r.diff<=-HOT_MIN_DIFF).sort((a,b)=>(a.diff-b.diff)||(a.f.rating-b.f.rating)||a.f.name.localeCompare(b.f.name));
-  return {n, loved, panned,
+  return {n, loved, panned, out,
     signed:n?rows.reduce((s,r)=>s+r.diff,0)/n:0,
     agree:n?rows.filter(r=>Math.abs(r.diff)<=HOT_AGREE).length/n:0};
 }
@@ -5008,7 +5135,16 @@ function renderTakesPanel(){
       <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:640px">The films where your rating sits furthest from the TMDB average — at least a full star apart. Only well-known films count, so every crowd score rests on plenty of votes.</p>
     </div>`;
   if(h.n<HOT_MIN_FILMS){
-    el.innerHTML=head+`<div style="text-align:center;padding:50px 0;color:#7d7d94;font-size:14px">${h.n?`Only ${h.n} rated film${h.n!==1?'s':''}`:'No rated films'}${filt?' in '+esc(filt):''} have a crowd score to compare with — hot takes need at least ${HOT_MIN_FILMS}.</div>`;
+    const o=h.out, pl=(n,w)=>`${n.toLocaleString()} ${w}${n!==1?'s':''}`;
+    const why=[
+      o.notInDb?`${pl(o.notInDb,'rated film')} matched on TMDB but ${o.notInDb!==1?'aren’t':'isn’t'} in the built-in database, which holds the most-watched films — anything rarer has too few votes for its average to mean much, so ${o.notInDb!==1?'they’re':'it’s'} left out`:'',
+      o.noCrowd?`${pl(o.noCrowd,'rated film')} ${o.noCrowd!==1?'have':'has'} no TMDB average at all`:'',
+      o.unmatched?`${pl(o.unmatched,'rated film')} couldn’t be matched to TMDB`:'',
+      o.unrated?`${pl(o.unrated,'film')} ${o.unrated!==1?'are':'is'} logged without a star rating, and hot takes compare your stars${(STATE._films||[]).some(f=>f.rating>0)?'':' — upload ratings.csv or the whole export to bring them in'}`:'',
+      filt?`the ${esc(filt)} filter is on — clear it to compare your whole library`:''
+    ].filter(Boolean);
+    el.innerHTML=head+`<div style="text-align:center;padding:40px 0 10px;color:#a0a0b4;font-size:14px">${h.n?`Only ${h.n} rated film${h.n!==1?'s':''}`:'No rated films'}${filt?' in '+esc(filt):''} can be compared with the crowd — hot takes need at least ${HOT_MIN_FILMS}.</div>
+      ${why.length?`<ul style="color:#7d7d94;font-size:12px;line-height:1.8;max-width:560px;margin:0 auto;padding-left:18px">${why.map(w=>`<li>${w.charAt(0).toUpperCase()+w.slice(1)}.</li>`).join('')}</ul>`:''}`;
     return;
   }
   const sp=anyPoster([...h.loved,...h.panned].slice(0,HOT_SHOWN*2).map(r=>r.f),filmPosterOf);
@@ -5111,6 +5247,7 @@ function rankFilms(){
     pool.push({f,d});
   }
   const maxRw=pool.reduce((m,x)=>Math.max(m,x.f.rewatchCount||0),0);
+  const favs=new Set(STATE._favorites||[]), liked=new Set(STATE._liked||[]);
   const W=FILM_WEIGHTS, w=k=>W[k]||0, wSum=FILM_KEYS.reduce((t,k)=>t+w(k),0)||1;
   const ranked=pool.map(({f,d})=>{
     const ratingScore=unrated?0.5:Math.max(0,Math.min(1,(f.rating-gMean)/span));
@@ -5127,12 +5264,18 @@ function rankFilms(){
       if(best.v>0) why.push({role:k,label,name:best.name,rank:best.rank,v:best.v});
     }
     const score=(w('rating')*ratingScore+w('crowd')*crowdScore+w('rewatches')*rewatchScore+w('people')*peopleScore)/wSum;
-    return {name:f.name,year:f.year,f,d,rating:f.rating,rewatchCount:f.rewatchCount||0,
+    const key=f.name+'||'+f.year;
+    // 2 = one of your four Letterboxd profile favourites, 1 = a film you liked
+    const loved=favs.has(key)?2:liked.has(key)?1:0;
+    return {name:f.name,year:f.year,f,d,rating:f.rating,rewatchCount:f.rewatchCount||0,loved,
       ratingScore,crowd,crowdDiff,crowdScore,rewatchScore,peopleScore,score,
       // A writer-director counts in both roles but is named once, at their best place
       why:why.sort((a,b)=>b.v-a.v||a.rank-b.rank).filter((w,i,all)=>all.findIndex(x=>x.name===w.name)===i)};
   });
-  ranked.sort((a,b)=>(b.score-a.score)||(b.rating-a.rating)||(b.rewatchCount-a.rewatchCount)
+  // Scores that show the same to one decimal are a tie, and your Letterboxd
+  // favourites and likes break it before anything else does.
+  const shown=r=>Math.round(r.score*1000);
+  ranked.sort((a,b)=>(shown(b)-shown(a))||(b.loved-a.loved)||(b.score-a.score)||(b.rating-a.rating)||(b.rewatchCount-a.rewatchCount)
     ||((b.d&&b.d.voteAvg)||0)-((a.d&&a.d.voteAvg)||0)||a.name.localeCompare(b.name));
   return {ranked,skipped,unrated,maxRw};
 }
@@ -5173,6 +5316,10 @@ function filmNiche(r,img){ return {name:r.name,lines:wrapTitle(r.name,13,3),scor
 function filmNicheSub(d){ return d.crowdDiff==null?(d.score*100).toFixed(1):`${(d.crowdDiff>=0?'+':'−')+Math.abs(d.crowdDiff).toFixed(1)} VS CROWD`; }
 function filmsLabel(){ const un=STATE.userName, filt=filterLabel(); return `${un?un+"'s":'Your'}${filt?' '+filt:''} Films Mount Rushmore`; }
 function filmStars(r){ return r>0?'★'.repeat(Math.floor(r))+(r%1>=0.5?'½':''):'unrated'; }
+function lovedMark(r){
+  return r.loved===2?'<span title="One of your four Letterboxd favourites" style="color:#e07a8a;font-size:11px;margin-left:6px">♥ fave</span>'
+    :r.loved===1?'<span title="You liked this on Letterboxd" style="color:#e07a8a;font-size:11px;margin-left:6px">♥</span>':'';
+}
 function filmMeta(r){
   const dirs=r.d?dirsOf(r.d):[];
   return [Number.isFinite(r.year)?String(r.year):'',dirs.length?dirsLabel(dirs.map(n=>personLinkHTML(n,`<span class="person-name">${esc(n)}</span>`))):''].filter(Boolean).join(' · ');
@@ -5198,7 +5345,7 @@ function filmCardHTML(r,i,sp){
         <div class="mono" style="color:${col};font-size:11px;font-weight:bold;letter-spacing:2px">#${i+1}</div>
         <div style="color:#f0e8d8;font-size:14px;font-weight:bold;line-height:1.3;margin-top:2px">${esc(r.name)}</div>
         <div style="color:#a0a0b4;font-size:11px;margin-top:2px">${filmMeta(r)}</div>
-        <div style="color:#c8a840;font-size:13px;margin-top:4px">${filmStars(r.rating)}${r.rewatchCount?`<span style="color:#b08a60;font-size:11px;margin-left:8px">↻ ${r.rewatchCount}</span>`:''}</div>
+        <div style="color:#c8a840;font-size:13px;margin-top:4px">${filmStars(r.rating)}${lovedMark(r)}${r.rewatchCount?`<span style="color:#b08a60;font-size:11px;margin-left:8px">↻ ${r.rewatchCount}</span>`:''}</div>
       </div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;padding:7px 10px;background:#0a0a14;border:1px solid #1c1c2c;border-radius:8px" title="Your rating against the TMDB average, on a 5-star scale">
@@ -5227,7 +5374,7 @@ function filmRowHTML(r,i,sp,face){
       ${r.why.length?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">${filmWhyChips(r,2)}</div>`:''}
     </div>
     <div style="text-align:right;flex-shrink:0;line-height:1.4">
-      <div style="color:#c8a840;font-size:12px">${filmStars(r.rating)}</div>
+      <div style="color:#c8a840;font-size:12px">${filmStars(r.rating)}${lovedMark(r)}</div>
       ${r.crowdDiff!=null?`<div style="color:${r.crowdDiff>=0?'#c8a840aa':'#9fb0d0aa'};font-size:10px" title="Your rating against the TMDB average">${crowdDiffText(r)} vs crowd ★${r.crowd.toFixed(1)}</div>`:''}
       ${r.rewatchCount?`<div style="color:#b08a60;font-size:10px">↻ ${r.rewatchCount} rewatch${r.rewatchCount!==1?'es':''}</div>`:''}
     </div>
@@ -5247,7 +5394,7 @@ function renderFilmsPanel(){
   el.innerHTML=`<div style="margin-bottom:16px">
       <div class="eyebrow" style="margin-bottom:5px">🎞 Films</div>
       <h1 id="films-title" style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">${esc(filmsLabel())}</h1>
-      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:680px">Your favourite films, ranked on how you rated them, how far that sits from the crowd's TMDB average, how often you went back, and how high their director, writers and leading actors stand on your other Rushmores. No one appears on two faces: a film sharing a director, writer or lead with a higher face gives way to the next one down.</p>
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:680px">Your favourite films, ranked on how you rated them, how far that sits from the crowd's TMDB average, how often you went back, and how high their director, writers and leading actors stand on your other Rushmores. No one appears on two faces: a film sharing a director, writer or lead with a higher face gives way to the next one down. Ties go to your Letterboxd profile favourites, then to films you liked.</p>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end;background:#0a0a14;border:1px solid #1a1a2a;border-radius:10px;padding:12px 18px;margin-bottom:18px">
       ${slider('rating','★ Rating','How far above your own average you rated it')}
@@ -5295,6 +5442,7 @@ function repaintFilms(){
   if(fr.skipped) notes.push(`${fr.skipped.toLocaleString()} unrated film${fr.skipped!==1?'s':''} left out`);
   if(fr.unrated) notes.push('no star ratings in this library — ranked on rewatches and favourite people only');
   if(!fr.maxRw) notes.push('no rewatches logged — upload diary.csv for the rewatch signal');
+  if(!(STATE._favorites||[]).length&&!(STATE._liked||[]).length) notes.push('upload the whole export zip to bring in your Letterboxd favourites and likes');
   el.innerHTML=`
     <div id="svg-films">${buildInlineSVG(top4.map(r=>filmNiche(r,posterURL(r.d&&r.d.poster,'w185'))),filmsLabel(),filmNicheSub)}</div>
     <div style="background:#0d0d1c;border:1px solid #1c1c2c;border-top:none;border-radius:0 0 12px 12px;padding:10px 20px;display:flex;gap:20px;flex-wrap:wrap;margin-bottom:22px;font-size:11px">
@@ -5304,6 +5452,7 @@ function repaintFilms(){
     </div>
     <div class="ornament-rule">◆</div>
     <div class="top4-grid" style="margin-bottom:32px">${top4.map((r,i)=>filmCardHTML(r,i,sp)).join('')}</div>
+    ${favoritesCompareHTML(list,top4)}
     ${pick.rest.length?`<div class="ornament-rule">◆</div><div style="margin-bottom:32px"><div class="eyebrow" style="margin-bottom:12px">Also Considered</div><div style="display:flex;flex-wrap:wrap;gap:10px">${alsoHTML}</div></div>`:''}
     <div class="filmstrip-rule"></div>
     <div style="margin-bottom:12px">
@@ -5312,6 +5461,38 @@ function repaintFilms(){
     </div>
     <div id="films-list"></div>`;
   repaintFilmList();
+}
+
+// Your Letterboxd four next to the four computed here. The favourites you picked
+// by hand are the one ranking the export already holds, so the gap is the story.
+function favoritesCompareHTML(list,top4){
+  const favs=STATE._favorites||[];
+  if(!favs.length||anyFilter()) return '';
+  const byKey=new Map(list.map((r,i)=>[r.name+'||'+r.year,{r,i}]));
+  const faces=new Set(top4.map(r=>r.name+'||'+r.year));
+  const films=STATE._films||[];
+  const rows=favs.map(k=>{
+    const hit=byKey.get(k), sep=k.lastIndexOf('||'), name=k.slice(0,sep), year=k.slice(sep+2);
+    const f=hit?hit.r.f:films.find(x=>x.name+'||'+x.year===k);
+    const where=faces.has(k)?'<span style="color:#6fbf8f">on your mountain</span>'
+      :hit?`<span style="color:#c8c0ae">#${hit.i+1}</span> <span style="color:#7d7d94">here</span>`
+      :f&&!(f.rating>0)?'<span style="color:#7d7d94">unrated, so not ranked</span>'
+      :'<span style="color:#7d7d94">not in this library</span>';
+    return `<div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #14141f">
+      ${posterHTML(f?filmPosterOf(f):null,name,26,true)}
+      <span style="color:#f0e8d8;font-size:13px;flex:1;min-width:0">${esc(name)} <span style="color:#7d7d94;font-size:11px">${esc(year)}</span></span>
+      <span style="font-size:11px;flex-shrink:0;text-align:right">${where}</span>
+    </div>`;
+  });
+  const n=favs.filter(k=>faces.has(k)).length;
+  return `<div style="background:#0d0d1c;border:1px solid #1c1c2c;border-radius:12px;padding:14px 18px;margin:-8px 0 32px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      <span class="eyebrow">♥ Your Letterboxd four</span>
+      <span style="color:#a0a0b4;font-size:12px">${n===favs.length?`All ${n} made the mountain`:n?`${n} of ${favs.length} made the mountain`:'None made the mountain'}</span>
+    </div>
+    <div style="color:#7d7d94;font-size:11px;margin-bottom:6px">The favourites on your Letterboxd profile, against the four ranked here. They win any tie, as do films you liked.</div>
+    ${rows.join('')}
+  </div>`;
 }
 
 function repaintFilmList(){
@@ -5368,8 +5549,7 @@ async function downloadFilmsPNG(){
 // Rushmore tabs are (current weights and minimum) over the films you had logged
 // by then. A film's date is its first diary entry or, failing that, the day you
 // rated it; a film with neither counts from the start, as your backlog. Ratings
-// are today's — the export keeps no history of them. The 100% bonus is left out:
-// filmographies have no past to replay.
+// are today's — the export keeps no history of them.
 function rushmoreTimeline(cat){
   const films=STATE._films, fd=STATE._filmData, diary=STATE._diary||[];
   if(!films||!fd||!diary.length) return null;
@@ -5400,7 +5580,7 @@ function rushmoreTimeline(cat){
       snap.push(Object.assign({},x.f,{rewatchCount:Math.max(upto.filter(v=>v.rewatch).length,upto.length-1,0)}));
     }
     const maps=buildPersonMaps(snap,fd);
-    const top=computeScores(maps[pick],maps.globalMean,MIN_FILMS).slice(0,4).map(d=>d.name);
+    const top=shownPeople(cat,computeScores(maps[pick],maps.globalMean,MIN_FILMS)).slice(0,4).map(d=>d.name);
     out.push({year:y, films:snap.length, top,
       moves:top.map((n,i)=>{ if(!prev) return null; const j=prev.indexOf(n); return j<0?'new':j-i; }),
       out:prev?prev.filter(n=>!top.includes(n)):[]});
@@ -5428,14 +5608,48 @@ function rushmoreTimelineHTML(){
       </div>
       ${r.out.length?`<span style="color:#7d7d94;font-size:10px;width:100%;padding-left:72px">dropped off: ${r.out.map(esc).join(', ')}</span>`:''}
     </div>`).join('');
-  return `<div id="rt-section" style="margin-bottom:34px">
+  return `<div id="rt-section" style="margin-bottom:34px;background:linear-gradient(150deg,#141420,#0e0e18);border:1px solid #c8a84033;border-radius:12px;padding:18px 22px">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">
       ${histSubhead('How your Rushmore changed','your top four at the end of each year')}
-      <span style="flex:1"></span><span style="display:inline-flex;gap:4px">${CATS.map(tab).join('')}</span>
+      <span style="flex:1"></span><span style="display:inline-flex;gap:4px;flex-wrap:wrap">${CATS.map(tab).join('')}<button type="button" class="btn-ghost btn-sm" onclick="downloadTimelineCard()" title="Download a shareable image of how your Rushmore changed">↓ Share card</button></span>
     </div>
     <div style="color:#7d7d94;font-size:11px;line-height:1.6;margin-bottom:8px;max-width:640px">Scored like the ${CAT_LABELS[cat]} tab, over the films you'd logged by 31 December. Ratings are today's, and films logged without a date count from the start.</div>
     ${rowsHTML}
   </div>`;
+}
+// The timeline as a share card: the most recent years, newest first
+const RT_CARD_ROWS=7;
+function buildTimelineCardSVG(tl,cat){
+  const W=1080,H=1350, un=STATE.userName, thisYear=new Date().getFullYear();
+  const rows=[...tl].reverse().slice(0,RT_CARD_ROWS);
+  // A short diary gets bigger type and is centred, rather than leaving the bottom half empty
+  const fs=rows.length<=4?28:24, gap=Math.round(fs*1.8), rowH=Math.min(210,Math.floor(940/Math.max(rows.length,1)));
+  const top=290+Math.round((940-rows.length*rowH)/2)+fs;
+  const fit=Math.floor(310/(fs*0.5));   // a column is ~340px of Georgia, less the rank
+  const body=rows.map((r,ri)=>{
+    const y=top+ri*rowH;
+    const names=r.top.map((n,i)=>{
+      const x=i%2?660:290, yy=y+(i>1?gap:0), isNew=r.moves[i]==='new';
+      return `${isNew?`<circle cx="${x-14}" cy="${yy-fs*0.33}" r="5" fill="#6fbf8f"/>`:''}<text x="${x}" y="${yy}" font-size="${fs}" font-family="Georgia,serif"><tspan fill="${RANK_COLORS[i]}" font-weight="bold">${i+1}</tspan><tspan fill="#f0e8d8" dx="12">${esc(svgTrunc(n,fit))}</tspan></text>`;
+    }).join('');
+    return `${ri?`<line x1="110" y1="${y-Math.round(rowH/2)+Math.round(gap/2)-fs/2}" x2="${W-110}" y2="${y-Math.round(rowH/2)+Math.round(gap/2)-fs/2}" stroke="#1a1a2e" stroke-width="2"/>`:''}
+      <text x="110" y="${y+10}" fill="#c8a840" font-size="40" font-family="Georgia,serif" font-weight="bold">${r.year}</text>
+      ${r.year===thisYear?`<text x="110" y="${y+38}" fill="#7d7d94" font-size="16" font-family="Georgia,serif" letter-spacing="2">SO FAR</text>`:''}
+      ${r.top.length?names:`<text x="290" y="${y}" fill="#7d7d94" font-size="22" font-family="Georgia,serif">Nobody qualified yet</text>`}`;
+  }).join('');
+  return shareCardFrame(W,H,`
+    <text x="${W/2}" y="120" text-anchor="middle" fill="#8c8ca2" font-size="22" font-family="Georgia,serif" letter-spacing="8">${esc((un?un+"'s ":'MY ').toUpperCase())}${esc(CAT_LABELS[cat].toUpperCase())}</text>
+    <text x="${W/2}" y="196" text-anchor="middle" fill="#f0e8d8" font-size="60" font-family="Georgia,serif" font-weight="bold">How My Rushmore Changed</text>
+    ${body}
+    ${rows.some(r=>r.moves.includes('new'))?`<circle cx="${W/2-118}" cy="${H-110}" r="5" fill="#6fbf8f"/><text x="${W/2-104}" y="${H-104}" fill="#8c8ca2" font-size="18" font-family="Georgia,serif">new to the top four that year</text>`:''}`);
+}
+function downloadTimelineCard(){
+  const cat=STATE._rtCat||'directors', h=getHistory();
+  if(!h){ showToast('Upload diary.csv for a timeline'); return; }
+  h._rt=h._rt||{};
+  const tl=h._rt[cat]||(h._rt[cat]=rushmoreTimeline(cat));
+  if(!tl||tl.length<2){ showToast('Not enough years logged to share yet'); return; }
+  svgToPNG(buildTimelineCardSVG(tl,cat),1080,1350,`${STATE.userName||'my'}-${cat}-rushmore-over-time`,1);
 }
 function setRtCat(cat){
   STATE._rtCat=CATS.includes(cat)?cat:'directors';
@@ -5867,6 +6081,8 @@ function renderHistoryPanel(){
       ${gap?`<br/><span style="color:#998870">${gap}</span>`:''}
     </div>
 
+    ${rushmoreTimelineHTML()}
+
     <div style="background:linear-gradient(150deg,#141420,#0e0e18);border:1px solid #1a1a2e;border-radius:12px;padding:22px 24px;margin-bottom:34px">
       <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:24px">
         ${histTile(h.views,'Viewings',`${h.films} distinct film${h.films!==1?'s':''}`)}
@@ -5907,8 +6123,6 @@ function renderHistoryPanel(){
       </div>
       ${rtNote?`<div style="color:#7d7d94;font-size:11px;margin-top:16px;border-top:1px solid #16162a;padding-top:12px">Hours are estimated${rtNote}.</div>`:''}
     </div>
-
-    ${rushmoreTimelineHTML()}
 
     ${ageYears.length?`<div style="display:flex;gap:30px;flex-wrap:wrap;margin-bottom:34px">
       <div style="flex:1;min-width:280px">
@@ -6512,9 +6726,9 @@ function reScoreAndRender(){
   if(STATE._filmData && STATE._films) rescoreFromState();
   else {
     // v1/v2 save files carry no raw data, so there is nothing to filter
-    STATE.directors=scoreDirectors(STATE._byDir,STATE._globalMean);
-    STATE.writers=computeScores(STATE._byWriter,STATE._globalMean,qualifyMin());
-    STATE.actors=computeScores(STATE._byActor,STATE._globalMean,qualifyMin());
+    STATE.directors=shownPeople('directors',scoreDirectors(STATE._byDir,STATE._globalMean));
+    STATE.writers=shownPeople('writers',computeScores(STATE._byWriter,STATE._globalMean,qualifyMin()));
+    STATE.actors=shownPeople('actors',computeScores(STATE._byActor,STATE._globalMean,qualifyMin()));
   }
   renderResults();
 }
@@ -6523,7 +6737,7 @@ function reScoreAndRender(){
 // so they skip re-scoring and just repaint the bars (which keeps search/sort state).
 function refreshAllCoverage(){
   _covCache=null;   // the feature definition changed, so every figure is stale
-  // ...unless it moved someone across 100%, which changes the ranking itself
+  // ...unless it moved someone across 100%, which changes their badge
   if(completionOutOfDate()){ reScoreAndRender(); if(_filmogModalName) renderFilmogModal(); return; }
   document.querySelectorAll('.cov-block').forEach(el=>{
     el.innerHTML=coverageInnerHTML(el.dataset.person,el.dataset.ac||'#c8a840');
@@ -6538,11 +6752,6 @@ function onCountDocs(on){ COUNT_DOCS=!!on; refreshAllCoverage(); }
 
 function onSettingSlider(key, val){
   const v=parseInt(val);
-  if(key==='completionBonus'){
-    setCompletionBonusUI(v);
-    if(STATE._byDir) scheduleRender();
-    return;
-  }
   if(key==='minRuntime'){
     MIN_RUNTIME=v;
     document.getElementById('lbl-minRuntime').textContent=v+' min';   // label stays instant
@@ -6870,7 +7079,7 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:10px">The Scoring Formula</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">📈 Volume × Quality</div><div style="color:#9595aa;font-size:11px">Films seen × avg rating on a log scale — 10 films at 4★ beat 3 at 5★, with diminishing returns. Volume stops counting past 16 films: more of someone is not more love</div></div>
+          <div><div style="color:#e0d8c8;font-size:13px">📈 Volume × Quality</div><div style="color:#9595aa;font-size:11px">Films seen × avg rating on a log scale — 10 films at 4★ beat 3 at 5★, with diminishing returns. Volume stops counting past 16 films: more of someone is not more love. Actors are counted by billing — a lead in full, down to half for fifth-billed and below</div></div>
           <div id="modal-w-volume" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">50%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
@@ -6886,7 +7095,7 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
           <div id="modal-w-peak" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">10%</div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#141422;border-radius:8px">
-          <div><div style="color:#e0d8c8;font-size:13px">🔁 Rewatches</div><div style="color:#9595aa;font-size:11px">Films you've logged more than once — a strong signal of genuine love</div></div>
+          <div><div style="color:#e0d8c8;font-size:13px">🔁 Rewatches</div><div style="color:#9595aa;font-size:11px">How often you go back to their films, per film — one rewatch per film on average fills the bar, discounted while the sample is small</div></div>
           <div id="modal-w-rewatches" style="color:#c8a840;font-size:15px;font-weight:bold;flex-shrink:0;margin-left:12px">5%</div>
         </div>
       </div>
@@ -6902,7 +7111,7 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
       <div style="color:#c8c0b0;font-size:13px;font-weight:bold;margin-bottom:8px">Filmography Coverage</div>
       <div style="color:#b2b2c4;font-size:13px;line-height:1.8">
         Each director card shows how much of their <b style="color:#c8c0b0">feature filmography</b> you've seen.
-        What counts as a feature is two tests, both adjustable under ⚖ Settings: a <b style="color:#c8c0b0">length</b>
+        What counts as a feature is two tests, both adjustable under ⚖ Settings → Advanced: a <b style="color:#c8c0b0">length</b>
         test (40 minutes by default, the Academy's threshold) and a <b style="color:#c8c0b0">kind</b> test —
         documentaries and concert films are excluded by default, since for most directors they're a separate
         body of work. Turn <b style="color:#c8c0b0">Count documentaries</b> on for someone like Herzog or Morris,
@@ -6912,11 +7121,9 @@ window.addEventListener('hashchange',()=>{ if(hasShareHash()) loadShareFromHash(
         <b style="color:#c8c0b0">Click the bar</b> to see exactly which films you're missing, listed by year.
         Hit <b style="color:#c8c0b0">⟳ Exact filmography</b> there (or on the directors panel, for the top four)
         to pull the complete credits from TMDB — that needs a free API key, and the result is cached for next time.
-        Coverage feeds the score in exactly one way: once you've seen <b style="color:#c8c0b0">every</b> feature on
-        the exact TMDB list, the director earns a small <b style="color:#c8c0b0">🏁 100% bonus</b> (+3 points by
-        default, adjustable or switchable off under ⚖ Settings). The ≈ estimate shows the badge but never the points —
-        "every film the database knows" is too often three of thirty. It's flat rather than proportional, so it
-        settles close calls without vaulting someone past a director you clearly rate higher.
+        Coverage never changes the score. Once you've seen <b style="color:#c8c0b0">every</b> feature on the exact
+        TMDB list, the director gets a <b style="color:#c8c0b0">🏁 100%</b> badge; the ≈ estimate shows a ≈ badge,
+        since "every film the database knows" is too often three of thirty.
       </div>
     </div>
 
