@@ -498,7 +498,7 @@ function dbGrew(){
   updateConfigBadge();
   const res=document.getElementById('page-results');
   // Films in the tail get their current directors too
-  if(STATE._films&&STATE._filmData&&(refreshDirectors()+rematchLongerTitles())) rescoreFromState();
+  if(STATE._films&&STATE._filmData&&(refreshDirectors()+rematchSaved())) rescoreFromState();
   if(STATE._films&&res&&res.classList.contains('active')){ const y=window.scrollY; renderResults(); window.scrollTo(0,y); }
 }
 
@@ -573,6 +573,36 @@ function lookupFromDB(film){
   return entry?parseDBEntry(entry):null;
 }
 
+// Letterboxd and TMDB often disagree on a year by one (a festival premiere against
+// the release), and the database can hold a different film under the year
+// Letterboxd uses: Split is 2016 on Letterboxd and 2017 on TMDB, and Split||2016 is
+// a little-seen drama of the same name. When a namesake a year either side is far
+// better known than the exact row, it is the one meant — returned as its key, and
+// treated as loose so a TMDB key still confirms it. Only for titles that come from
+// Letterboxd: the database's own titles (filmographies) always mean their own row.
+const OUTSHONE_RATIO=20, OUTSHONE_MIN_VOTES=1000;
+function outshoneBy(film){
+  if(!Number.isFinite(film.year)) return null;
+  const key=film.name+'||'+film.year;
+  if(!FILM_DB[key]) return null;
+  const idx=voteIndex(), own=idx.byKey.get(key);
+  if(own==null) return null;   // no counts to compare
+  let best=null, bestV=0;
+  for(const y of [film.year+1,film.year-1]){
+    const k=film.name+'||'+y, v=idx.byKey.get(k);
+    if(v!=null&&v>=OUTSHONE_MIN_VOTES&&v>=own*OUTSHONE_RATIO&&v>bestV){ best=k; bestV=v; }
+  }
+  return best;
+}
+// A Letterboxd entry against the database: {data, loose, key} or null.
+function letterboxdDBMatch(film){
+  const o=outshoneBy(film);
+  if(o) return {data:parseDBEntry(FILM_DB[o]),loose:true,key:o};
+  const exact=lookupFromDB(film);
+  if(exact) return {data:exact,loose:false,key:film.name+'||'+film.year};
+  return fuzzyDBMatch(film);
+}
+
 // Fallback for films the exact Title||Year key misses, which is commoner than it
 // sounds: Letterboxd and TMDB disagree on release years (Casablanca 1942 vs 1943),
 // punctuation (en-dash vs hyphen in "Mission: Impossible – Fallout"), and
@@ -614,8 +644,11 @@ function dbMatchQuality(me,c){
   if(dy>1) return 0;
   const [s,sRaw,l,lRaw]=me.t.length<=c.t.length?[me.t,me.raw,c.t,c.raw]:[c.t,c.raw,me.t,me.raw];
   if(s.length<SUBTITLE_MIN||!l.startsWith(s+' ')) return 0;
-  const rt=parseDBEntry(FILM_DB[c.key]||'').runtime;
+  const ce=parseDBEntry(FILM_DB[c.key]||''), rt=ce.runtime;
   if(rt>0&&rt<FEATURE_MIN_RUNTIME) return 0;               // a featurette or TV special
+  // A longer title that is a documentary is a making-of, not the thing itself:
+  // "Hamilton: History Has Its Eyes On You", "Obi-Wan Kenobi: A Jedi's Return"
+  if(c.t!==me.t&&l===c.t&&ce.genres.includes('Documentary')) return 0;
   if(titleHead(lRaw)===s) return 1;                         // "Glass Onion: A Knives Out Mystery"
   // Letterboxd drops the "Part One" TMDB keeps on retitled sequels (Dead Reckoning)
   if(/^part (one|1|i)$/.test(l.slice(s.length+1))) return 1;
@@ -647,6 +680,10 @@ function fuzzyDBMatch(film){
     if(Math.abs(c.y-film.year)<Math.abs(best.y-film.year)){ best=c; bestQ=q; }
   }
   if(!best) return null;
+  // A series never goes to a longer film title: Chernobyl (2019) is the HBO show,
+  // not "Chernobyl: Zone of Exclusion" (2019). The database holds no series, so
+  // left unmatched it is counted as one.
+  if(best.t!==t&&looksLikeSeries(film)) return null;
   // A same-title match that had to drift a year is only confident when nothing
   // else in the database could be it. The DB holds hundreds of pairs of different
   // films sharing a title a year or two apart (Ballerina 2023/2025, Alpha
@@ -1159,6 +1196,8 @@ function lookupFilmsInDB(films){
   // same key. The DB row is kept either way, so a failed lookup costs nothing.
   const flagRecent=f=>{ if(Number.isFinite(f.year)&&f.year>=edge) recent.push(f); };
   for(const film of films){
+    const o=outshoneBy(film);
+    if(o){ filmData[film.name+'||'+film.year]=parseDBEntry(FILM_DB[o]); loose.push(film); continue; }
     const r=lookupFromDB(film);
     if(r){ filmData[film.name+'||'+film.year]=r; flagRecent(film); }
     else misses.push(film);
@@ -1370,27 +1409,52 @@ function refreshDirectors(){
   }
   return n;
 }
-// A saved library keeps the matches it was made with, so a film the fuzzy path
-// once matched to a longer title (Hamilton → "Hamilton: History Has Its Eyes On
-// You") would keep it for good. This re-runs the match for those films only: no
-// exact key, a stored record that is a database row under a longer title, and a
-// fuzzy match now to the same title as logged. Anything TMDB looked up resolves
-// to its own film and is left alone.
-function rematchLongerTitles(){
+// A saved library keeps the matches it was made with, so a fix to matching never
+// reached it. This re-runs the match, on load, for the three cases fixed since:
+//  - a film the fuzzy path matched to a longer title when the same title, a few
+//    years off, is the better known (Hamilton → "History Has Its Eyes On You");
+//  - an exact Title||Year far outshone by its namesake a year away (Split 2016);
+//  - a series matched to a longer film title (Chernobyl), or any title matched to
+//    a longer documentary one (a making-of), now left unmatched.
+// Only records that are themselves the database row the old rule picked are
+// touched, so anything TMDB looked up resolves to its own film and stays.
+function rematchSaved(){
   const fd=STATE._filmData, films=STATE._films;
   if(!fd||!films) return 0;
   const idOf=k=>parseInt((FILM_DB[k]||'').split('|',7)[6],10);
+  // Is the stored record a database row under a longer version of this title?
+  const fromLongerTitle=(f,d)=>{
+    const t=normTitle(f.name), sp=t.indexOf(' ');
+    const bucket=titleIndex().get(sp>=0?t.slice(0,sp):t)||[];
+    const old=bucket.find(c=>idOf(c.key)===d.tmdbId);
+    return !!old&&old.t!==t&&old.t.startsWith(t+' ');
+  };
+  const unmatch=(f,key)=>{
+    delete fd[key];
+    if(STATE._matchedFilms>0) STATE._matchedFilms--;
+    const miss=STATE._missList||(STATE._missList=[]);
+    if(!miss.some(x=>x.name===f.name&&x.year===f.year)) miss.push({name:f.name,year:f.year});
+    STATE._dbMisses=miss.length;
+  };
   let n=0;
   for(const f of films){
     const key=f.name+'||'+f.year, d=fd[key];
-    if(!d||!d.tmdbId||FILM_DB[key]) continue;
+    if(!d||!d.tmdbId) continue;
+    if(FILM_DB[key]){
+      const o=outshoneBy(f);
+      if(o&&d.tmdbId===idOf(key)&&idOf(o)!==d.tmdbId){ fd[key]=parseDBEntry(FILM_DB[o]); n++; }
+      continue;
+    }
+    if(looksLikeSeries(f)){
+      if(fromLongerTitle(f,d)){ unmatch(f,key); n++; }
+      continue;
+    }
+    if(!fromLongerTitle(f,d)) continue;
     const m=fuzzyDBMatch(f);
-    if(!m||!m.data.tmdbId||m.data.tmdbId===d.tmdbId) continue;
-    const t=normTitle(f.name), sp=t.indexOf(' ');
-    if(normTitle(m.key.slice(0,m.key.lastIndexOf('||')))!==t) continue;
-    const bucket=titleIndex().get(sp>=0?t.slice(0,sp):t)||[];
-    const old=bucket.find(c=>idOf(c.key)===d.tmdbId);
-    if(!old||old.t===t||!old.t.startsWith(t+' ')) continue;
+    // The rule that made this match no longer does (a making-of documentary)
+    if(!m){ unmatch(f,key); n++; continue; }
+    if(!m.data.tmdbId||m.data.tmdbId===d.tmdbId) continue;
+    if(normTitle(m.key.slice(0,m.key.lastIndexOf('||')))!==normTitle(f.name)) continue;
     fd[key]=m.data; n++;
   }
   return n;
@@ -1428,7 +1492,7 @@ function applySavedData(d){
     if(!films.length||!Object.keys(filmData).length) throw new Error('Cache file has no film data.');
     STATE._filmData=filmData;
     STATE._films=films;
-    refreshDirectors(); rematchLongerTitles();
+    refreshDirectors(); rematchSaved();
     const matched=STATE._matchedFilms;
     rescoreFromState();   // re-score with current weights/settings
     if(matched) STATE._matchedFilms=matched;
@@ -4252,7 +4316,7 @@ async function setWatchlist(films){
   const seenIdx=librarySeenIndex(), edge=dbSnapshotYear(), todo=[];
   for(const f of films){
     if(isSeenIn(seenIdx,f)) continue;             // won't be ranked, so don't look it up
-    const exact=lookupFromDB(f), m=exact?null:fuzzyDBMatch(f), r=exact||(m&&m.data);
+    const m=letterboxdDBMatch(f), r=m&&m.data;
     if(r) wl.data[f.name+'||'+f.year]=r;
     // TMDB matching leans on the year, so undated entries can't be looked up
     if(Number.isFinite(f.year)&&(!r||(m&&m.loose)||f.year>=edge)) todo.push(f);
@@ -4878,7 +4942,7 @@ async function addOwnedFilms(rows){
   const edge=dbSnapshotYear(), todo=[];
   for(const f of fresh){
     o.films.unshift(f);
-    const exact=lookupFromDB(f), m=exact?null:fuzzyDBMatch(f), r=exact||(m&&m.data);
+    const m=letterboxdDBMatch(f), r=m&&m.data;
     if(r) o.data[f.name+'||'+f.year]=r;
     if(Number.isFinite(f.year)&&(!r||(m&&m.loose)||f.year>=edge)) todo.push(f);
   }
@@ -5181,7 +5245,7 @@ function renderDataBanners(){
 // a film database cannot hold those — so they are set apart, and the "add a key"
 // advice is only given when a key would actually help.
 const SERIES_HINT=/\b(season|series|episode|miniseries|limited series)\b/i;
-const KNOWN_SERIES=new Set(['chernobyl','squid game','loki','wandavision','the queen s gambit','queen s gambit','adolescence','the bear','bear','severance','the last of us','last of us','succession','breaking bad','the sopranos','sopranos','the wire','wire','mad men','true detective','stranger things','the office','office','fleabag','sherlock','the crown','crown','black mirror','mr robot','the boys','boys','andor','the mandalorian','mandalorian','shogun','shōgun','baby reindeer','beef','the white lotus','white lotus','euphoria','ted lasso','game of thrones','house of the dragon','arcane','dark','fargo','twin peaks','band of brothers','the pacific','pacific','normal people','the night of','night of','watchmen','ozark','narcos','peaky blinders','mindhunter','the leftovers','leftovers','bojack horseman','the penguin','penguin','fallout','one piece','invincible','the studio','studio','paradise','the pitt','pitt','daredevil born again','presumed innocent','disclaimer','say nothing','black doves','dope thief','the rehearsal','rehearsal','common side effects','mo','ripley','shrinking','slow horses','silo','the diplomat','diplomat','bad sisters','pachinko','the morning show','morning show','yellowjackets','the righteous gemstones','righteous gemstones','curb your enthusiasm','barry','atlanta','reservation dogs','what we do in the shadows','only murders in the building','abbott elementary','the great','great','hacks','poker face','the afterparty','afterparty','veep']);
+const KNOWN_SERIES=new Set(['chernobyl','squid game','loki','wandavision','the queen s gambit','queen s gambit','adolescence','the bear','bear','severance','the last of us','last of us','succession','breaking bad','the sopranos','sopranos','the wire','wire','mad men','true detective','stranger things','the office','office','fleabag','sherlock','the crown','crown','black mirror','mr robot','the boys','boys','andor','the mandalorian','mandalorian','shogun','shōgun','baby reindeer','beef','the white lotus','white lotus','euphoria','ted lasso','game of thrones','house of the dragon','arcane','dark','fargo','twin peaks','band of brothers','the pacific','pacific','normal people','the night of','night of','watchmen','ozark','narcos','peaky blinders','mindhunter','the leftovers','leftovers','bojack horseman','the penguin','penguin','fallout','one piece','invincible','the studio','studio','paradise','the pitt','pitt','daredevil born again','presumed innocent','disclaimer','say nothing','black doves','dope thief','the rehearsal','rehearsal','common side effects','mo','ripley','shrinking','slow horses','silo','the diplomat','diplomat','bad sisters','pachinko','the morning show','morning show','yellowjackets','the righteous gemstones','righteous gemstones','curb your enthusiasm','barry','obi wan kenobi','ahsoka','the acolyte','acolyte','atlanta','reservation dogs','what we do in the shadows','only murders in the building','abbott elementary','the great','great','hacks','poker face','the afterparty','afterparty','veep']);
 const SERIES_TITLE=/^(dahmer )?monsters? the .+ story$/;   // Netflix's Monster anthology: "DAHMER - Monster: The Jeffrey Dahmer Story"
 function looksLikeSeries(f){ const t=normTitle(f.name); return SERIES_HINT.test(f.name)||KNOWN_SERIES.has(t)||SERIES_TITLE.test(t); }
 function missListHTML(){
