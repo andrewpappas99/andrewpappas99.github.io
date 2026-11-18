@@ -5192,18 +5192,22 @@ const NICHE_LABELS=[[65,'Deep in the stacks'],[50,'Off the beaten path'],[35,'Ad
 
 // tmdbId → votes and Title||Year → votes, built once per database. `any` is false
 // for a database built before the vote column, which has nothing to score from.
+// Every row is indexed, with or without the column, because "no count here" must
+// never read as "not in the database" — that is what makes a film rare. The core
+// and tail can come from different builds for a visit (the service worker serves
+// each file's cached copy and refreshes it behind the page), and an old core with
+// a new tail once called 12 Angry Men a film with under 100 votes.
 let _voteIdx=null;
 function voteIndex(){
   if(_voteIdx) return _voteIdx;
-  // A row with the column but no number in it maps to null: in the database, count unknown
+  // A row without a number in the ninth field maps to null: in the database, count unknown
   const byKey=new Map(), byId=new Map();
   let any=false;
   for(const key in FILM_DB){
     const e=FILM_DB[key], last=e.lastIndexOf('|');
-    // The vote column is the ninth field; an 8-field row ends in a poster or blank
+    // The vote column is the ninth field, after the eighth pipe
     let n=0; for(let j=0;j<last;j++) if(e.charCodeAt(j)===124) n++;
-    if(n!==7) continue;
-    const v=e.slice(last+1), votes=/^\d+$/.test(v)?parseInt(v,10):null;
+    const v=n===7?e.slice(last+1):'', votes=/^\d+$/.test(v)?parseInt(v,10):null;
     if(votes!=null) any=true;
     byKey.set(key,votes);
     const id=parseInt(e.split('|',7)[6],10);
@@ -5282,6 +5286,9 @@ function nicheSectionHTML(){
       <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:640px">Based on how many people have ever rated each film on TMDB — its all-time vote count, not today’s trending chart. A film with ${NICHE_HI.toLocaleString()}+ votes scores 0, one with ${NICHE_LO} or fewer scores 100, on a log scale, and your score is the average.</p>
     </div>`;
   if(s.noVotes) return head+`<div style="color:#8c8ca2;font-size:13px;line-height:1.7;max-width:560px">The built-in database doesn’t carry vote counts yet — they arrive with its next weekly update.</div>`;
+  // Mostly unknown: this device holds a database half from before the vote column.
+  // A score from the remainder would be a score of whichever films happen to be new.
+  if(s.unknown&&s.unknown>=s.n) return head+`<div style="color:#8c8ca2;font-size:13px;line-height:1.7;max-width:560px">${s.unknown.toLocaleString()} of your films don’t have a vote count yet — part of the film database on this device is from before the update that added them. <a href="#" onclick="location.reload();return false" style="color:#c8a840">Reload the page</a> to finish loading the new one.</div>`;
   if(s.n<NICHE_MIN_FILMS) return head+`<div style="color:#8c8ca2;font-size:13px">${s.n?`Only ${s.n} matched film${s.n!==1?'s':''}`:'No matched films'}${filt?' in '+esc(filt):''} — the score needs at least ${NICHE_MIN_FILMS}.</div>`;
   const pct=k=>Math.round(100*k/s.n);
   const under500=s.tiers[3]+s.tiers[4];
@@ -5311,7 +5318,10 @@ function nicheSectionHTML(){
       ${col('Your deepest cuts','the films the fewest people have rated',s.deep,'')}
       ${s.rated?col('Hidden gems',`rated ${NICHE_GEM_RATING}★ or more, fewest votes first`,s.gems,`None yet — no film you rated ${NICHE_GEM_RATING}★ or more.`):''}
     </div>
-    ${s.series?`<div style="color:#7d7d94;font-size:11px;margin-top:14px">${s.series.toLocaleString()} title${s.series!==1?'s':''} that look${s.series===1?'s':''} like TV series ${s.series!==1?'are':'is'} left out.</div>`:''}`;
+    ${s.series||s.unknown?`<div style="color:#7d7d94;font-size:11px;margin-top:14px">${[
+      s.series?`${s.series.toLocaleString()} title${s.series!==1?'s':''} that look${s.series===1?'s':''} like TV series ${s.series!==1?'are':'is'} left out.`:'',
+      s.unknown?`${s.unknown.toLocaleString()} film${s.unknown!==1?'s':''} without a vote count in the database ${s.unknown!==1?'are':'is'} left out.`:''
+    ].filter(Boolean).join(' ')}</div>`:''}`;
 }
 
 // ─── Hot takes ────────────────────────────────────────────────────────────────
