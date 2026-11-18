@@ -493,7 +493,7 @@ function loadDBTail(){
   return _tailPromise;
 }
 function dbGrew(){
-  _titleIndex=null; _dirIndex=null; _blindIdx=null; _peopleIdx=null; _peopleIdxFor=''; _dbHasIds=null;
+  _titleIndex=null; _dirIndex=null; _blindIdx=null; _peopleIdx=null; _peopleIdxFor=''; _dbHasIds=null; _voteIdx=null;
   invalidateCoverage();
   updateConfigBadge();
   const res=document.getElementById('page-results');
@@ -514,7 +514,8 @@ function parseDBEntry(entry){
     voteAvg:parts[4]?parseFloat(parts[4]):null,
     runtime:parts[5]?parseInt(parts[5],10):null,  // absent in DBs built before the runtime upgrade
     tmdbId:parts[6]?parseInt(parts[6],10)||null:null,  // absent in DBs built before the id upgrade
-    poster:POSTER_RE.test(parts[7]||'')?parts[7]:null  // TMDB poster path, absent before the poster upgrade
+    poster:POSTER_RE.test(parts[7]||'')?parts[7]:null,  // TMDB poster path, absent before the poster upgrade
+    votes:/^\d+$/.test(parts[8]||'')?parseInt(parts[8],10):null  // all-time TMDB vote count, absent before the votes upgrade
   };
 }
 // Poster paths are a bare TMDB file name; anything else is not put in a URL.
@@ -2388,11 +2389,11 @@ function directorIndex(){
     // that can't recommend something that isn't out yet; it costs a handful of
     // current-year titles. The TMDB tier has real dates and is exact.
     if(!Number.isFinite(y)||y>=thisYear) continue;
-    // Fields: 0 director |1 writers |2 actors |3 genres |4 voteAvg |5 runtime |6 tmdbId |7 poster.
-    // Find the first seven pipes in one pass rather than splitting 29k long strings.
+    // Fields: 0 director |1 writers |2 actors |3 genres |4 voteAvg |5 runtime |6 tmdbId |7 poster |8 votes.
+    // Find the first eight pipes in one pass rather than splitting 29k long strings.
     const pipes=[];
-    for(let j=0;j<entry.length&&pipes.length<7;j++) if(entry.charCodeAt(j)===124) pipes.push(j);
-    const posterTail=pipes.length>6?entry.slice(pipes[6]+1):'';
+    for(let j=0;j<entry.length&&pipes.length<8;j++) if(entry.charCodeAt(j)===124) pipes.push(j);
+    const posterTail=pipes.length>6?entry.slice(pipes[6]+1,pipes[7]):'';
     // slice(x, undefined) runs to the end, which is exactly right for 4-field DBs
     const g=pipes.length>2?entry.slice(pipes[2]+1,pipes[3]):'';
     const va=pipes.length>3?parseFloat(entry.slice(pipes[3]+1,pipes[4])):NaN;
@@ -5166,6 +5167,153 @@ function missListHTML(){
     </div></details>`;
 }
 
+// ─── Niche score ──────────────────────────────────────────────────────────────
+// How far off the beaten path your films sit, from TMDB's all-time vote counts —
+// its "popularity" figure is a trending measure (Home Alone sinks every spring),
+// while votes pile up for good and barely move. Each film scores on a log scale:
+// NICHE_HI votes or more (Inception, The Dark Knight) is 0, NICHE_LO or fewer is
+// 100, and your score is the average, so one obscure film among hundreds of hits
+// moves it a little and a steady diet of them moves it a lot. A matched film the
+// database doesn't hold counts as fully niche: the database takes every film with
+// 100+ votes, so anything missing from it has fewer. That goes for a film with no
+// lookup at all, too — without a TMDB key, missing from the database is all the
+// app knows, and those are the rarest films you log. Only TV series are set aside.
+// Follows the genre and decade chips like the rest of the page.
+const NICHE_HI=25000, NICHE_LO=50, NICHE_MIN_FILMS=10, NICHE_SHOWN=10, NICHE_GEM_RATING=4;
+// The bands for the bar, most watched first; `min` is the vote count a film needs
+const NICHE_TIERS=[
+  {min:10000,label:'Blockbusters',col:'#5a5a72'},
+  {min:2500, label:'Well known',  col:'#8a7a50'},
+  {min:500,  label:'Lesser known',col:'#c8a840'},
+  {min:100,  label:'Obscure',     col:'#d88a40'},
+  {min:0,    label:'Rare',        col:'#c85040', note:'under 100 votes'}
+];
+const NICHE_LABELS=[[65,'Deep in the stacks'],[50,'Off the beaten path'],[35,'Adventurous'],[20,'Mainstream, with detours'],[0,'Mainstream']];
+
+// tmdbId → votes and Title||Year → votes, built once per database. `any` is false
+// for a database built before the vote column, which has nothing to score from.
+let _voteIdx=null;
+function voteIndex(){
+  if(_voteIdx) return _voteIdx;
+  // A row with the column but no number in it maps to null: in the database, count unknown
+  const byKey=new Map(), byId=new Map();
+  let any=false;
+  for(const key in FILM_DB){
+    const e=FILM_DB[key], last=e.lastIndexOf('|');
+    // The vote column is the ninth field; an 8-field row ends in a poster or blank
+    let n=0; for(let j=0;j<last;j++) if(e.charCodeAt(j)===124) n++;
+    if(n!==7) continue;
+    const v=e.slice(last+1), votes=/^\d+$/.test(v)?parseInt(v,10):null;
+    if(votes!=null) any=true;
+    byKey.set(key,votes);
+    const id=parseInt(e.split('|',7)[6],10);
+    if(id>0&&!byId.has(id)) byId.set(id,votes);
+  }
+  return (_voteIdx={byKey,byId,any});
+}
+
+function filmObscurity(votes){
+  const v=Math.max(1,votes);
+  return Math.max(0,Math.min(1,(Math.log(NICHE_HI)-Math.log(v))/(Math.log(NICHE_HI)-Math.log(NICHE_LO))));
+}
+function nicheLabel(score){ return NICHE_LABELS.find(([min])=>score>=min)[1]; }
+function nicheTier(votes){ return NICHE_TIERS.findIndex(t=>(votes==null?0:votes)>=t.min); }
+function fmtVotes(v){
+  if(v==null) return 'under 100';
+  if(v>=1000) return (v/1000).toFixed(v>=10000?0:1).replace(/\.0$/,'')+'k';
+  return String(v);
+}
+
+function nicheStats(){
+  const idx=voteIndex();
+  if(!idx.any) return {noVotes:true};
+  const films=STATE._films||[], fd=STATE._filmData||{};
+  const rows=[];
+  let series=0, unknown=0;
+  for(const f of films){
+    const key=f.name+'||'+f.year, d=fd[key]||null;
+    if(d?!passesFilters(f,d):anyFilter()) continue;
+    if(!d&&looksLikeSeries(f)){ series++; continue; }
+    let v=d&&d.tmdbId?idx.byId.get(d.tmdbId):undefined;
+    if(v===undefined) v=idx.byKey.get(key);
+    if(v===undefined){ const m=fuzzyDBMatch(f); if(m) v=idx.byKey.get(m.key); }
+    if(v===null){ unknown++; continue; }   // in the database without a count: no guessing
+    const votes=v===undefined?null:v;   // null: not in the database, so under 100
+    rows.push({f,d,votes,o:votes==null?1:filmObscurity(votes)});
+  }
+  const n=rows.length;
+  if(!n) return {n,series,unknown};
+  // Fewest votes first; unlisted films have the fewest of all, and among equals
+  // the one you rated higher leads
+  const byVotes=(a,b)=>((a.votes==null?-1:a.votes)-(b.votes==null?-1:b.votes))||((b.f.rating||0)-(a.f.rating||0))||a.f.name.localeCompare(b.f.name);
+  const sorted=[...rows].sort(byVotes);
+  const tiers=NICHE_TIERS.map(()=>0);
+  for(const r of rows) tiers[nicheTier(r.votes)]++;
+  return {n, series, unknown,
+    score:Math.round(100*rows.reduce((s,r)=>s+r.o,0)/n),
+    median:sorted[Math.floor((n-1)/2)].votes,
+    tiers,
+    deep:sorted.slice(0,NICHE_SHOWN),
+    gems:sorted.filter(r=>r.f.rating>=NICHE_GEM_RATING).slice(0,NICHE_SHOWN),
+    rated:rows.some(r=>r.f.rating>0)};
+}
+
+function nicheRowHTML(r,i,sp){
+  const stars=x=>'★'.repeat(Math.floor(x))+(x%1>=0.5?'½':'');
+  const t=NICHE_TIERS[nicheTier(r.votes)];
+  const dir=dirsLabel(dirsOf(r.d).map(n=>personLinkHTML(n,`<span class="person-name">${esc(n)}</span>`)));
+  return `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #14141f">
+    <span class="mono" style="color:#777787;font-size:11px;width:18px;flex-shrink:0">${i+1}</span>
+    ${posterHTML(filmPosterOf(r.f),r.f.name,30,sp)}
+    <div style="flex:1;min-width:0">
+      <div style="color:#f0e8d8;font-size:13px;font-weight:600;line-height:1.3">${esc(r.f.name)}</div>
+      <div style="color:#83839b;font-size:11px">${Number.isFinite(r.f.year)?r.f.year:'—'}${dir?' · '+dir:''}</div>
+    </div>
+    ${r.f.rating>0?`<div style="color:#c8a840;font-size:12px;flex-shrink:0" title="Your rating">${stars(r.f.rating)}</div>`:''}
+    <span class="mono" title="${r.votes==null?'Not in the built-in database, which holds every film with 100 or more TMDB votes — so it has fewer':r.votes.toLocaleString()+' TMDB votes'}" style="color:${t.col};background:${t.col}14;border:1px solid ${t.col}33;border-radius:20px;padding:2px 8px;font-size:11px;flex-shrink:0;min-width:56px;text-align:center">${r.votes==null?'&lt;100':fmtVotes(r.votes)}</span>
+  </div>`;
+}
+
+function nicheSectionHTML(){
+  const s=nicheStats(), filt=filterLabel();
+  const head=`<div style="margin:38px 0 18px;padding-top:26px;border-top:1px solid #1a1a2e">
+      <div class="eyebrow" style="margin-bottom:5px">🔦 Niche Score</div>
+      <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">How far off the beaten path${filt?' — '+esc(filt):''}</h2>
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:640px">Based on how many people have ever rated each film on TMDB — its all-time vote count, not today’s trending chart. A film with ${NICHE_HI.toLocaleString()}+ votes scores 0, one with ${NICHE_LO} or fewer scores 100, on a log scale, and your score is the average.</p>
+    </div>`;
+  if(s.noVotes) return head+`<div style="color:#8c8ca2;font-size:13px;line-height:1.7;max-width:560px">The built-in database doesn’t carry vote counts yet — they arrive with its next weekly update.</div>`;
+  if(s.n<NICHE_MIN_FILMS) return head+`<div style="color:#8c8ca2;font-size:13px">${s.n?`Only ${s.n} matched film${s.n!==1?'s':''}`:'No matched films'}${filt?' in '+esc(filt):''} — the score needs at least ${NICHE_MIN_FILMS}.</div>`;
+  const pct=k=>Math.round(100*k/s.n);
+  const under500=s.tiers[3]+s.tiers[4];
+  const bar=`<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:#14141f;margin:4px 0 10px" role="img" aria-label="${NICHE_TIERS.map((t,i)=>`${t.label} ${pct(s.tiers[i])}%`).join(', ')}">
+      ${NICHE_TIERS.map((t,i)=>s.tiers[i]?`<div title="${t.label}: ${s.tiers[i]} film${s.tiers[i]!==1?'s':''}" style="width:${100*s.tiers[i]/s.n}%;background:${t.col}"></div>`:'').join('')}
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;color:#8c8ca2;font-size:11px">
+      ${NICHE_TIERS.map((t,i)=>`<span style="white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${t.col};margin-right:5px"></span>${t.label} <span style="color:#6a6a80">${i===NICHE_TIERS.length-1?t.note:(i?t.min.toLocaleString()+'+':t.min.toLocaleString()+'+ votes')}</span> <span class="mono" style="color:#c8c0ae">${pct(s.tiers[i])}%</span></span>`).join('')}
+    </div>`;
+  const sp=anyPoster([...s.deep,...s.gems].map(r=>r.f),filmPosterOf);
+  const col=(title,sub,list,empty)=>`<div style="flex:1;min-width:280px">
+      <div style="color:#c8c0b0;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase">${title}</div>
+      <div style="color:#7d7d94;font-size:11px;margin:3px 0 8px">${sub}</div>
+      ${list.length?list.map((r,i)=>nicheRowHTML(r,i,sp)).join(''):`<div style="color:#7d7d94;font-size:13px;padding:8px 0">${empty}</div>`}
+    </div>`;
+  return head+`
+    <div style="background:linear-gradient(150deg,#141420,#0e0e18);border:1px solid #1a1a2e;border-radius:12px;padding:18px 22px;margin-bottom:26px">
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:18px">
+        ${histTile(s.score+'<span style="font-size:14px;color:#7d7d94"> / 100</span>','Niche score',nicheLabel(s.score))}
+        ${histTile(fmtVotes(s.median),'Typical film','median TMDB votes')}
+        ${histTile(pct(under500)+'%','Under 500 votes',`${under500.toLocaleString()} of ${s.n.toLocaleString()} films`)}
+        ${histTile(pct(s.tiers[0])+'%','Blockbusters','10,000+ votes')}
+      </div>
+      ${bar}
+    </div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap">
+      ${col('Your deepest cuts','the films the fewest people have rated',s.deep,'')}
+      ${s.rated?col('Hidden gems',`rated ${NICHE_GEM_RATING}★ or more, fewest votes first`,s.gems,`None yet — no film you rated ${NICHE_GEM_RATING}★ or more.`):''}
+    </div>
+    ${s.series?`<div style="color:#7d7d94;font-size:11px;margin-top:14px">${s.series.toLocaleString()} title${s.series!==1?'s':''} that look${s.series===1?'s':''} like TV series ${s.series!==1?'are':'is'} left out.</div>`:''}`;
+}
+
 // ─── Hot takes ────────────────────────────────────────────────────────────────
 // The films where your rating sits furthest from TMDB's average, both ways. The
 // data is already loaded for the "vs the crowd" score. Only films the built-in
@@ -5234,7 +5382,7 @@ function renderTakesPanel(){
       filt?`the ${esc(filt)} filter is on — clear it to compare your whole library`:''
     ].filter(Boolean);
     el.innerHTML=head+`<div style="text-align:center;padding:40px 0 10px;color:#a0a0b4;font-size:14px">${h.n?`Only ${h.n} rated film${h.n!==1?'s':''}`:'No rated films'}${filt?' in '+esc(filt):''} can be compared with the crowd — hot takes need at least ${HOT_MIN_FILMS}.</div>
-      ${why.length?`<ul style="color:#7d7d94;font-size:12px;line-height:1.8;max-width:560px;margin:0 auto;padding-left:18px">${why.map(w=>`<li>${w.charAt(0).toUpperCase()+w.slice(1)}.</li>`).join('')}</ul>`:''}`;
+      ${why.length?`<ul style="color:#7d7d94;font-size:12px;line-height:1.8;max-width:560px;margin:0 auto;padding-left:18px">${why.map(w=>`<li>${w.charAt(0).toUpperCase()+w.slice(1)}.</li>`).join('')}</ul>`:''}`+nicheSectionHTML();
     return;
   }
   const sp=anyPoster([...h.loved,...h.panned].slice(0,HOT_SHOWN*2).map(r=>r.f),filmPosterOf);
@@ -5255,7 +5403,7 @@ function renderTakesPanel(){
       ${col('You loved, the crowd didn\'t','rated well above the TMDB average',h.loved,true)}
       ${col('The crowd loved, you didn\'t','rated well below the TMDB average',h.panned,false)}
     </div>
-    <div style="margin-top:22px"><button class="btn-ghost btn-sm" onclick="downloadHotTakesCard()" title="Download a shareable image of your hottest takes">↓ Share card</button></div>`;
+    <div style="margin-top:22px"><button class="btn-ghost btn-sm" onclick="downloadHotTakesCard()" title="Download a shareable image of your hottest takes">↓ Share card</button></div>`+nicheSectionHTML();
 }
 
 function buildHotTakesCardSVG(h,posters){
