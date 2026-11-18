@@ -498,7 +498,7 @@ function dbGrew(){
   updateConfigBadge();
   const res=document.getElementById('page-results');
   // Films in the tail get their current directors too
-  if(STATE._films&&STATE._filmData&&refreshDirectors()) rescoreFromState();
+  if(STATE._films&&STATE._filmData&&(refreshDirectors()+rematchLongerTitles())) rescoreFromState();
   if(STATE._films&&res&&res.classList.contains('active')){ const y=window.scrollY; renderResults(); window.scrollTo(0,y); }
 }
 
@@ -630,11 +630,21 @@ function fuzzyDBMatch(film){
   if(!bucket) return null;
   const me={t,y:film.year,raw:film.name};
   let best=null, bestQ=0;
+  // The bucket is in database order, which is popularity order, so the first
+  // candidate seen is the better known.
   for(const c of bucket){
     const q=dbMatchQuality(me,c);
     if(!q) continue;
-    // better quality first, then nearest year, so a same-title remake loses to the real match
-    if(q>bestQ||(q===bestQ&&Math.abs(c.y-film.year)<Math.abs(best.y-film.year))){ best=c; bestQ=q; }
+    if(q>bestQ){ best=c; bestQ=q; continue; }
+    if(q!==bestQ) continue;
+    // Two loose candidates, one the same title years apart (a re-release: Hamilton
+    // is 2020 on Letterboxd, 2025 on TMDB) and one a longer title from the same
+    // year (the 46-minute "Hamilton: History Has Its Eyes On You"). Nearest year
+    // would pick the wrong one every time; the better-known film is what was meant,
+    // so the one already held stays.
+    if(q===1&&(c.t===t)!==(best.t===t)) continue;
+    // otherwise nearest year, so a same-title remake loses to the real match
+    if(Math.abs(c.y-film.year)<Math.abs(best.y-film.year)){ best=c; bestQ=q; }
   }
   if(!best) return null;
   // A same-title match that had to drift a year is only confident when nothing
@@ -1360,6 +1370,31 @@ function refreshDirectors(){
   }
   return n;
 }
+// A saved library keeps the matches it was made with, so a film the fuzzy path
+// once matched to a longer title (Hamilton → "Hamilton: History Has Its Eyes On
+// You") would keep it for good. This re-runs the match for those films only: no
+// exact key, a stored record that is a database row under a longer title, and a
+// fuzzy match now to the same title as logged. Anything TMDB looked up resolves
+// to its own film and is left alone.
+function rematchLongerTitles(){
+  const fd=STATE._filmData, films=STATE._films;
+  if(!fd||!films) return 0;
+  const idOf=k=>parseInt((FILM_DB[k]||'').split('|',7)[6],10);
+  let n=0;
+  for(const f of films){
+    const key=f.name+'||'+f.year, d=fd[key];
+    if(!d||!d.tmdbId||FILM_DB[key]) continue;
+    const m=fuzzyDBMatch(f);
+    if(!m||!m.data.tmdbId||m.data.tmdbId===d.tmdbId) continue;
+    const t=normTitle(f.name), sp=t.indexOf(' ');
+    if(normTitle(m.key.slice(0,m.key.lastIndexOf('||')))!==t) continue;
+    const bucket=titleIndex().get(sp>=0?t.slice(0,sp):t)||[];
+    const old=bucket.find(c=>idOf(c.key)===d.tmdbId);
+    if(!old||old.t===t||!old.t.startsWith(t+' ')) continue;
+    fd[key]=m.data; n++;
+  }
+  return n;
+}
 function applySavedData(d){
   if(!d||typeof d!=='object') throw new Error('Invalid cache file.');
   if(!d.version||!d.directors) throw new Error('Invalid cache file.');
@@ -1393,7 +1428,7 @@ function applySavedData(d){
     if(!films.length||!Object.keys(filmData).length) throw new Error('Cache file has no film data.');
     STATE._filmData=filmData;
     STATE._films=films;
-    refreshDirectors();
+    refreshDirectors(); rematchLongerTitles();
     const matched=STATE._matchedFilms;
     rescoreFromState();   // re-score with current weights/settings
     if(matched) STATE._matchedFilms=matched;
