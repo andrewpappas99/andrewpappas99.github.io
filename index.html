@@ -5215,6 +5215,17 @@ function missListHTML(){
 // app knows, and those are the rarest films you log. Only TV series are set aside.
 // Follows the genre and decade chips like the rest of the page.
 const NICHE_HI=25000, NICHE_LO=50, NICHE_MIN_FILMS=10, NICHE_SHOWN=10, NICHE_GEM_RATING=4;
+// New films haven't had time to collect their votes: in the November 2026 database
+// the 100th most-voted feature of 2016-19 has ~2,500 votes, of 2024 1,024, of 2025
+// 852 and of 2026 489. So a film from the last NICHE_RECENT years is scored with its
+// votes scaled up by how far its year's NICHE_REF_RANKth film trails the settled
+// years before it (the median of NICHE_BASE_YEARS years ending NICHE_RECENT+1 years
+// ago), never past NICHE_MAX_BOOST. The ranked film rather than a median, because
+// the database takes a film by popularity and the bottom of each year is whatever
+// was trending; the top hundred of any year are always in. Worked out from the
+// database itself, so it moves on with every rebuild. The vote count shown stays
+// the real one.
+const NICHE_RECENT=4, NICHE_BASE_YEARS=5, NICHE_REF_RANK=100, NICHE_MAX_BOOST=6;
 // The bands for the bar, most watched first; `min` is the vote count a film needs
 const NICHE_TIERS=[
   {min:10000,label:'Blockbusters',col:'#5a5a72'},
@@ -5248,9 +5259,37 @@ function voteIndex(){
     const id=parseInt(e.split('|',7)[6],10);
     if(id>0&&!byId.has(id)) byId.set(id,votes);
   }
-  return (_voteIdx={byKey,byId,any});
+  return (_voteIdx={byKey,byId,any,boost:nicheBoosts()});
 }
 
+// Release year → the factor its films' votes are scaled by (only recent years appear)
+function nicheBoosts(){
+  const boost=new Map(), thisYear=new Date().getFullYear();
+  const first=thisYear-NICHE_RECENT-NICHE_BASE_YEARS+1;
+  const byYear=new Map();
+  for(const key in FILM_DB){
+    const i=key.lastIndexOf('||'), y=parseInt(key.slice(i+2),10);
+    if(!(y>=first&&y<=thisYear)) continue;
+    const p=FILM_DB[key].split('|');
+    const rt=parseInt(p[5],10)||0, v=/^\d+$/.test(p[8]||'')?parseInt(p[8],10):null;
+    if(v==null||(rt&&rt<FEATURE_MIN_RUNTIME)) continue;
+    if(!byYear.has(y)) byYear.set(y,[]);
+    byYear.get(y).push(v);
+  }
+  const ref=y=>{ const a=byYear.get(y); if(!a||a.length<NICHE_REF_RANK) return null; a.sort((x,z)=>z-x); return a[NICHE_REF_RANK-1]; };
+  const base=[];
+  for(let y=first;y<first+NICHE_BASE_YEARS;y++){ const r=ref(y); if(r) base.push(r); }
+  if(!base.length) return boost;   // too small a database to say
+  base.sort((a,b)=>a-b);
+  const mid=base[Math.floor(base.length/2)];
+  for(let y=thisYear-NICHE_RECENT+1;y<=thisYear;y++){
+    const r=ref(y);
+    // A year with fewer than NICHE_REF_RANK films yet is barely under way: full boost
+    const b=r?Math.min(NICHE_MAX_BOOST,Math.max(1,mid/r)):NICHE_MAX_BOOST;
+    if(b>1) boost.set(y,b);
+  }
+  return boost;
+}
 function filmObscurity(votes){
   const v=Math.max(1,votes);
   return Math.max(0,Math.min(1,(Math.log(NICHE_HI)-Math.log(v))/(Math.log(NICHE_HI)-Math.log(NICHE_LO))));
@@ -5278,19 +5317,24 @@ function nicheStats(){
     if(v===undefined){ const m=fuzzyDBMatch(f); if(m) v=idx.byKey.get(m.key); }
     if(v===null){ unknown++; continue; }   // in the database without a count: no guessing
     const votes=v===undefined?null:v;   // null: not in the database, so under 100
-    rows.push({f,d,votes,o:votes==null?1:filmObscurity(votes)});
+    const boost=idx.boost.get(f.year)||1;
+    // Scored as the count it should reach: a film missing from the database is
+    // taken at NICHE_LO, so an older one scores fully niche and a brand-new one less
+    const eff=(votes==null?NICHE_LO:votes)*boost;
+    rows.push({f,d,votes,boost,eff,o:filmObscurity(eff)});
   }
   const n=rows.length;
   if(!n) return {n,series,unknown};
-  // Fewest votes first; unlisted films have the fewest of all, and among equals
-  // the one you rated higher leads
-  const byVotes=(a,b)=>((a.votes==null?-1:a.votes)-(b.votes==null?-1:b.votes))||((b.f.rating||0)-(a.f.rating||0))||a.f.name.localeCompare(b.f.name);
+  // Fewest (age-adjusted) votes first; among equals the one you rated higher leads
+  const byVotes=(a,b)=>(a.eff-b.eff)||((b.f.rating||0)-(a.f.rating||0))||a.f.name.localeCompare(b.f.name);
   const sorted=[...rows].sort(byVotes);
   const tiers=NICHE_TIERS.map(()=>0);
-  for(const r of rows) tiers[nicheTier(r.votes)]++;
+  for(const r of rows) tiers[nicheTier(r.eff)]++;
+  const mid=sorted[Math.floor((n-1)/2)];
   return {n, series, unknown,
     score:Math.round(100*rows.reduce((s,r)=>s+r.o,0)/n),
-    median:sorted[Math.floor((n-1)/2)].votes,
+    median:mid.votes==null&&mid.boost===1?null:Math.round(mid.eff),
+    adjusted:rows.filter(r=>r.boost>1).length,
     tiers,
     deep:sorted.slice(0,NICHE_SHOWN),
     gems:sorted.filter(r=>r.f.rating>=NICHE_GEM_RATING).slice(0,NICHE_SHOWN),
@@ -5299,8 +5343,10 @@ function nicheStats(){
 
 function nicheRowHTML(r,i,sp){
   const stars=x=>'★'.repeat(Math.floor(x))+(x%1>=0.5?'½':'');
-  const t=NICHE_TIERS[nicheTier(r.votes)];
+  const t=NICHE_TIERS[nicheTier(r.eff)];
   const dir=dirsLabel(dirsOf(r.d).map(n=>personLinkHTML(n,`<span class="person-name">${esc(n)}</span>`)));
+  const count=r.votes==null?'Not in the built-in database, which holds every film with 100 or more TMDB votes — so it has fewer':r.votes.toLocaleString()+' TMDB vote'+(r.votes!==1?'s':'');
+  const tip=r.boost>1?`${count} so far. Films from ${r.f.year} are still collecting votes, so it is scored as about ${fmtVotes(Math.round(r.eff))} (×${r.boost.toFixed(1)})`:count;
   return `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #14141f">
     <span class="mono" style="color:#777787;font-size:11px;width:18px;flex-shrink:0">${i+1}</span>
     ${posterHTML(filmPosterOf(r.f),r.f.name,30,sp)}
@@ -5309,7 +5355,7 @@ function nicheRowHTML(r,i,sp){
       <div style="color:#83839b;font-size:11px">${Number.isFinite(r.f.year)?r.f.year:'—'}${dir?' · '+dir:''}</div>
     </div>
     ${r.f.rating>0?`<div style="color:#c8a840;font-size:12px;flex-shrink:0" title="Your rating">${stars(r.f.rating)}</div>`:''}
-    <span class="mono" title="${r.votes==null?'Not in the built-in database, which holds every film with 100 or more TMDB votes — so it has fewer':r.votes.toLocaleString()+' TMDB votes'}" style="color:${t.col};background:${t.col}14;border:1px solid ${t.col}33;border-radius:20px;padding:2px 8px;font-size:11px;flex-shrink:0;min-width:56px;text-align:center">${r.votes==null?'&lt;100':fmtVotes(r.votes)}</span>
+    <span class="mono" title="${esc(tip)}" style="color:${t.col};background:${t.col}14;border:1px solid ${t.col}33;border-radius:20px;padding:2px 8px;font-size:11px;flex-shrink:0;min-width:56px;text-align:center">${r.votes==null?'&lt;100':fmtVotes(r.votes)}${r.boost>1?'<span style="opacity:.6;margin-left:3px" aria-hidden="true">↗</span>':''}</span>
   </div>`;
 }
 
@@ -5318,7 +5364,7 @@ function nicheSectionHTML(){
   const head=`<div style="margin:38px 0 18px;padding-top:26px;border-top:1px solid #1a1a2e">
       <div class="eyebrow" style="margin-bottom:5px">🔦 Niche Score</div>
       <h2 style="font-family:'Playfair Display',Georgia,serif;font-size:22px;color:#f0e8d8;font-weight:700">How far off the beaten path${filt?' — '+esc(filt):''}</h2>
-      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:640px">Based on how many people have ever rated each film on TMDB — its all-time vote count, not today’s trending chart. A film with ${NICHE_HI.toLocaleString()}+ votes scores 0, one with ${NICHE_LO} or fewer scores 100, on a log scale, and your score is the average.</p>
+      <p style="color:#a0a0b4;font-size:13px;line-height:1.7;margin-top:8px;max-width:640px">Based on how many people have ever rated each film on TMDB — its all-time vote count, not today’s trending chart. A film with ${NICHE_HI.toLocaleString()}+ votes scores 0, one with ${NICHE_LO} or fewer scores 100, on a log scale, and your score is the average. Films from the last few years are still collecting votes, so theirs are scaled up to where that year is heading — the real count is shown, marked ↗.</p>
     </div>`;
   if(s.noVotes) return head+`<div style="color:#8c8ca2;font-size:13px;line-height:1.7;max-width:560px">The built-in database doesn’t carry vote counts yet — they arrive with its next weekly update.</div>`;
   // Mostly unknown: this device holds a database half from before the vote column.
@@ -5343,7 +5389,7 @@ function nicheSectionHTML(){
     <div style="background:linear-gradient(150deg,#141420,#0e0e18);border:1px solid #1a1a2e;border-radius:12px;padding:18px 22px;margin-bottom:26px">
       <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:18px">
         ${histTile(s.score+'<span style="font-size:14px;color:#7d7d94"> / 100</span>','Niche score',nicheLabel(s.score))}
-        ${histTile(fmtVotes(s.median),'Typical film','median TMDB votes')}
+        ${histTile(fmtVotes(s.median),'Typical film',s.adjusted?'median TMDB votes, new films adjusted':'median TMDB votes')}
         ${histTile(pct(under500)+'%','Under 500 votes',`${under500.toLocaleString()} of ${s.n.toLocaleString()} films`)}
         ${histTile(pct(s.tiers[0])+'%','Blockbusters','10,000+ votes')}
       </div>
